@@ -1,5 +1,9 @@
 package com.example.miaucare.ui.screens
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,17 +24,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.miaucare.R
-import com.example.miaucare.data.ColonyItem
+import com.example.miaucare.data.ApiResult
+import com.example.miaucare.data.DoctorItem
 import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.data.MiauRole
 import com.example.miaucare.ui.components.*
 import com.example.miaucare.ui.theme.*
+import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.util.Locale
 
 // =========================================================================
 // 1. ADMINISTRADOR · INICIO + MODAL HERRAMIENTAS (`Inicio`)
@@ -40,9 +48,18 @@ fun AdminHomeScreen(
     onNavigate: (String) -> Unit,
     onRoleSwitch: (MiauRole) -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showToolsModal by remember { mutableStateOf(false) }
-    var lifeStatusConfirmed by remember { mutableStateOf(false) }
-    val pendingCount = MiauCareRepository.pendingApprovals.count { !it.isReviewed }
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchAdminDashboardData()
+    }
+
+    val pendingCatsCount = MiauCareRepository.pendingApprovals.count { !it.isReviewed }
+    val pendingVetsCount = MiauCareRepository.pendingVetApprovals.size
+    val totalPending = pendingCatsCount + pendingVetsCount
+    val solicitudesInbox = MiauCareRepository.solicitudesGatoPendientes
 
     Column(
         modifier = Modifier
@@ -53,13 +70,24 @@ fun AdminHomeScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 12.dp, bottom = 110.dp)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            McServerConnectionChip(context = context)
+            IconButton(onClick = { scope.launch { MiauCareRepository.fetchAdminDashboardData() } }) {
+                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Actualizar", tint = McTextPrimary)
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
         McRolePrototypeSwitcher(
             onRoleSelected = onRoleSwitch,
             onOpenAdminTools = { showToolsModal = true }
         )
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Header: "MiauCare · Administración" / "Hola, Admin" / "Viernes, 13 de noviembre" + "Mi perfil"
+        // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -67,8 +95,14 @@ fun AdminHomeScreen(
         ) {
             Column {
                 Text(text = "MiauCare · Administración", style = McLabel11Regular)
-                Text(text = "Hola, Admin", style = McTitle24)
-                Text(text = "Viernes, 13 de noviembre", style = McLabel11Regular)
+                Text(
+                    text = "Hola, ${MiauCareRepository.sessionUserName.ifBlank { "Admin" }}",
+                    style = McTitle24
+                )
+                Text(
+                    text = MiauCareRepository.sessionUserEmail.ifBlank { "adminmiaucare@administrador.com" },
+                    style = McLabel11Regular
+                )
             }
             Surface(
                 color = McCardWhite,
@@ -93,13 +127,13 @@ fun AdminHomeScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // 3 KPI Boxes (`10 Gatos censados`, `4 Usuarios`, `3 Por aprobar`)
+        // 3 KPI Boxes
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             AdminKpiBox(
-                number = "10",
+                number = "${MiauCareRepository.cats.size}",
                 label = "Gatos censados",
                 isCoral = false,
                 modifier = Modifier
@@ -115,7 +149,7 @@ fun AdminHomeScreen(
                     .clickable { onNavigate("admin_users") }
             )
             AdminKpiBox(
-                number = "$pendingCount",
+                number = "$totalPending",
                 label = "Por aprobar",
                 isCoral = true,
                 modifier = Modifier
@@ -164,14 +198,14 @@ fun AdminHomeScreen(
             AdminQuickActionCard(
                 icon = Icons.AutoMirrored.Outlined.Assignment,
                 title = "Censo felino",
-                subtitle = "10 fichas",
+                subtitle = "${MiauCareRepository.cats.size} fichas",
                 modifier = Modifier.weight(1f),
                 onClick = { onNavigate("admin_census") }
             )
             AdminQuickActionCard(
                 icon = Icons.Outlined.Group,
                 title = "Usuarios",
-                subtitle = "4 cuentas",
+                subtitle = "${MiauCareRepository.teamUsers.size} cuentas",
                 modifier = Modifier.weight(1f),
                 onClick = { onNavigate("admin_users") }
             )
@@ -184,7 +218,7 @@ fun AdminHomeScreen(
             AdminQuickActionCard(
                 icon = Icons.Outlined.CheckCircle,
                 title = "Aprobar registros",
-                subtitle = "$pendingCount nuevos",
+                subtitle = "$totalPending nuevos",
                 modifier = Modifier.weight(1f),
                 onClick = { onNavigate("admin_approve_records") }
             )
@@ -199,7 +233,7 @@ fun AdminHomeScreen(
 
         Spacer(modifier = Modifier.height(22.dp))
 
-        // Section: "Bandeja de entrada" | "3 pendientes"
+        // Section: "Bandeja de entrada" (`GET /api/solicitudes-gato/pendientes`)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -207,15 +241,14 @@ fun AdminHomeScreen(
         ) {
             Text(text = "Bandeja de entrada", style = McTitle18)
             Text(
-                text = if (lifeStatusConfirmed) "2 pendientes" else "3 pendientes",
+                text = "${solicitudesInbox.size} solicitudes críticas",
                 style = McLabel12Bold.copy(color = McCoralDark)
             )
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Inbox Item 1: "Estado de vida por confirmar" (`Manchas · MC-024`)
-        if (!lifeStatusConfirmed) {
+        solicitudesInbox.forEach { sol ->
             Surface(
                 color = McCardWhite,
                 shape = RoundedCornerShape(22.dp),
@@ -242,15 +275,15 @@ fun AdminHomeScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Estado de vida por confirmar",
+                                text = "Solicitud: ${sol.tipo}",
                                 style = McLabel11Regular.copy(
                                     color = McCoralDark,
                                     fontWeight = FontWeight.Bold
                                 )
                             )
-                            Text(text = "Manchas · MC-024", style = McTitle16)
+                            Text(text = "${sol.gatoNombre} · ${sol.gatoCodigo}", style = McTitle16)
                             Text(
-                                text = "Voluntario reportó fallecimiento en Colonia Norte.",
+                                text = "${sol.zonaNombre} · Solicitó: ${sol.voluntarioNombre}",
                                 style = McLabel11Regular
                             )
                         }
@@ -259,11 +292,9 @@ fun AdminHomeScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
                             onClick = {
-                                lifeStatusConfirmed = true
-                                MiauCareRepository.showToast(
-                                    title = if (MiauCareRepository.prototypeSimulateError) "No se pudo procesar" else "Cambio confirmado",
-                                    isError = MiauCareRepository.prototypeSimulateError
-                                )
+                                scope.launch {
+                                    MiauCareRepository.resolverSolicitudGato(sol.id, aceptar = true)
+                                }
                             },
                             shape = RoundedCornerShape(999.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = McCoral),
@@ -280,8 +311,9 @@ fun AdminHomeScreen(
                                 .weight(1f)
                                 .height(38.dp)
                                 .clickable {
-                                    lifeStatusConfirmed = true
-                                    MiauCareRepository.showToast("Reporte rechazado")
+                                    scope.launch {
+                                        MiauCareRepository.resolverSolicitudGato(sol.id, aceptar = false)
+                                    }
                                 }
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -293,7 +325,7 @@ fun AdminHomeScreen(
             }
         }
 
-        // Inbox Item 2: "Reasignación automática" (`Colonia Norte · 4 gatos`)
+        // Reasignación masiva shortcut
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(22.dp),
@@ -322,12 +354,12 @@ fun AdminHomeScreen(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Reasignación automática",
+                        text = "Directorio y reasignación masiva",
                         style = McLabel11Regular.copy(fontWeight = FontWeight.Bold)
                     )
-                    Text(text = "Colonia Norte · 4 gatos", style = McTitle16)
+                    Text(text = "${MiauCareRepository.doctors.size} veterinarios activos", style = McTitle16)
                     Text(
-                        text = "Dr. Luis Pérez pasó a no disponible. Reasignados a Dra. Sofía García.",
+                        text = "Toca para gestionar carga de pacientes o reasignar masivamente.",
                         style = McLabel11Regular
                     )
                 }
@@ -335,7 +367,6 @@ fun AdminHomeScreen(
         }
     }
 
-    // Modal "Herramientas" matching `step_80_shot_6_admin_Parametros_y_Modales.png`
     if (showToolsModal) {
         AdminHerramientasModal(
             onDismiss = { showToolsModal = false },
@@ -418,8 +449,6 @@ fun AdminHerramientasModal(
     onDismiss: () -> Unit,
     onSelectRoute: (String) -> Unit
 ) {
-    val simulateError = MiauCareRepository.prototypeSimulateError
-
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             color = McCardWhite,
@@ -445,62 +474,6 @@ fun AdminHerramientasModal(
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(imageVector = Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Simulación del prototipo (`Flujo normal` | `Simular error`)
-                Surface(
-                    color = McBackground,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(text = "Simulación del prototipo", style = McLabel12Bold)
-                        Text(
-                            text = "Alterna el resultado de las acciones para probar estados.",
-                            style = McLabel11Regular
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Surface(
-                                color = if (!simulateError) McBlack else McSoftNeutral,
-                                shape = RoundedCornerShape(999.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(34.dp)
-                                    .clickable { MiauCareRepository.prototypeSimulateError = false }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "Flujo normal",
-                                        style = McLabel11Regular.copy(
-                                            color = if (!simulateError) McCardWhite else McTextPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                }
-                            }
-                            Surface(
-                                color = if (simulateError) McBlack else McSoftNeutral,
-                                shape = RoundedCornerShape(999.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(34.dp)
-                                    .clickable { MiauCareRepository.prototypeSimulateError = true }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "Simular error",
-                                        style = McLabel11Regular.copy(
-                                            color = if (simulateError) McCardWhite else McTextPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    )
-                                }
-                            }
                         }
                     }
                 }
@@ -564,15 +537,24 @@ fun AdminCensusScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedZone by remember { mutableStateOf("Todas las zonas") }
 
-    val censusOrderIds = listOf("cat-gary", "cat-peach", "cat-whitney", "cat-buggy", "cat-manchas", "cat-samantha", "cat-benito", "cat-luna")
-    val orderedCats = censusOrderIds.mapNotNull { id -> MiauCareRepository.cats.find { it.id == id } }
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchGatos()
+        MiauCareRepository.fetchZonasResumen()
+    }
 
-    val filteredCats = orderedCats.filter { cat ->
-        val matchesQuery = cat.name.contains(searchQuery, ignoreCase = true) ||
-            cat.code.contains(searchQuery, ignoreCase = true)
-        val matchesZone = selectedZone == "Todas las zonas" || cat.colony.contains(selectedZone.removePrefix("Colonia "), ignoreCase = true)
+    val filteredCats = MiauCareRepository.cats.filter { cat ->
+        val matchesQuery = searchQuery.isBlank() ||
+                cat.name.contains(searchQuery, ignoreCase = true) ||
+                cat.code.contains(searchQuery, ignoreCase = true)
+        val matchesZone = selectedZone == "Todas las zonas" ||
+                cat.colony.contains(selectedZone, ignoreCase = true)
         matchesQuery && matchesZone
     }
+
+    val zoneOptions = buildList {
+        add("Todas las zonas")
+        MiauCareRepository.colonies.forEach { add(it.name) }
+    }.distinct()
 
     Column(
         modifier = Modifier
@@ -590,14 +572,14 @@ fun AdminCensusScreen(
         ) {
             Column {
                 Text(text = "Censo felino", style = McTitle24)
-                Text(text = "10 gatos registrados", style = McBody14Regular)
+                Text(text = "${MiauCareRepository.cats.size} gatos registrados", style = McBody14Regular)
             }
             Surface(
                 color = McCoral,
                 shape = CircleShape,
                 modifier = Modifier
                     .size(42.dp)
-                    .clickable { onOpenEditCat("cat-manchas") }
+                    .clickable { onOpenEditCat("new") }
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -621,40 +603,18 @@ fun AdminCensusScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Surface(
-                color = McSoftNeutral,
-                shape = RoundedCornerShape(999.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable {
-                        selectedZone = if (selectedZone == "Todas las zonas") "Colonia Norte" else "Todas las zonas"
-                    }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(text = selectedZone, style = McLabel12Bold)
-                    Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(16.dp))
-                }
-            }
-            Surface(
-                color = McSoftNeutral,
-                shape = RoundedCornerShape(999.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(text = "Todos los estados", style = McLabel12Bold)
-                    Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(16.dp))
-                }
+            zoneOptions.forEach { zn ->
+                McFilterPill(
+                    label = zn,
+                    selected = selectedZone == zn,
+                    onClick = { selectedZone = zn },
+                    unselectedBg = McSoftNeutral
+                )
             }
         }
 
@@ -681,23 +641,56 @@ fun AdminCensusScreen(
 }
 
 // =========================================================================
-// 3. ADMINISTRADOR · EDITAR FICHA (`Editar ficha` - Manchas · MC-024)
+// 3. ADMINISTRADOR · EDITAR / CREAR FICHA (`POST / PUT / PATCH /api/gatos`, Regla FALLECIDO 409)
 // =========================================================================
 @Composable
 fun AdminEditCatScreen(
     catId: String,
     onBack: () -> Unit
 ) {
-    val cat = remember(catId) {
-        if (catId.isBlank()) MiauCareRepository.getCatById("cat-manchas")
-        else MiauCareRepository.getCatById(catId)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val isNewCat = catId == "new" || catId.isBlank()
+    val cat = remember(catId, MiauCareRepository.cats.size) {
+        if (isNewCat) null else MiauCareRepository.getCatById(catId)
     }
-    var name by remember { mutableStateOf(cat.name) }
-    var code by remember { mutableStateOf(cat.code) }
-    var sex by remember { mutableStateOf(cat.sex) }
-    var age by remember { mutableStateOf(cat.age) }
-    var zone by remember { mutableStateOf(cat.colony) }
-    var lifeStatus by remember { mutableStateOf(cat.lifeStatus) }
+
+    var name by remember(cat) { mutableStateOf(cat?.name ?: "") }
+    var code by remember(cat) { mutableStateOf(cat?.code ?: "MC-0${MiauCareRepository.cats.size + 11}") }
+    var sex by remember(cat) { mutableStateOf(cat?.sex ?: "Macho") }
+    var age by remember(cat) { mutableStateOf(cat?.age ?: "2 años") }
+    var breed by remember(cat) { mutableStateOf(cat?.breed ?: "Mestizo") }
+    var weight by remember(cat) { mutableStateOf(cat?.weightKg ?: "3.8") }
+    var selectedZoneId by remember(cat) { mutableLongStateOf(cat?.zoneId ?: 1L) }
+    var zoneName by remember(cat) { mutableStateOf(cat?.colony ?: "Colonia Centro") }
+    var lifeStatus by remember(cat) { mutableStateOf(if (cat?.isFallecido == true) "Fallecido" else "Activo") }
+    var photoBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var conflict409Message by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(catId) {
+        MiauCareRepository.fetchZonasResumen()
+        if (!isNewCat && cat != null) {
+            MiauCareRepository.fetchGatoDetalleYHistorial(cat.id)
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes != null) {
+                    photoBytes = bytes
+                    MiauCareRepository.showToast("Foto cargada lista para subir a Supabase (gatos)")
+                }
+            } catch (_: Exception) {
+                MiauCareRepository.showToast("No se pudo leer la imagen", isError = true)
+            }
+        }
+    }
+
+    val isCurrentlyFallecido = cat?.isFallecido == true
 
     Column(
         modifier = Modifier
@@ -712,14 +705,69 @@ fun AdminEditCatScreen(
             McBackCircleButton(onClick = onBack)
             Spacer(modifier = Modifier.width(12.dp))
             Column {
-                Text(text = "Editar ficha", style = McTitle18)
-                Text(text = "${cat.name} · ${cat.code}", style = McLabel11Regular)
+                Text(text = if (isNewCat) "Nuevo gato en censo" else "Editar ficha", style = McTitle18)
+                Text(
+                    text = if (isNewCat) "Registro directo aprobado" else "${cat?.name ?: ""} · ${cat?.code ?: ""}",
+                    style = McLabel11Regular
+                )
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Photo + Cambiar foto
+        // Regla Gato FALLECIDO (409 Conflict)
+        if (isCurrentlyFallecido) {
+            Surface(
+                color = McCoralSoft,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, McCoralBorder),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = null,
+                        tint = McCoralDark,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Gato FALLECIDO · Edición deshabilitada (RN 409)",
+                            style = McLabel12Bold.copy(color = McCoralDark)
+                        )
+                        Text(
+                            text = "Una vez marcado como FALLECIDO, el backend bloquea cualquier edición (PUT), nuevo historial o retorno a ACTIVO con 409 Conflict.",
+                            style = McLabel11Regular.copy(color = McCoralDark)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (conflict409Message != null) {
+            Surface(
+                color = McCoralSoft,
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, McCoralBorder),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 14.dp)
+            ) {
+                Text(
+                    text = "409 Conflict: $conflict409Message",
+                    style = McLabel12Bold.copy(color = McCoralDark),
+                    modifier = Modifier.padding(14.dp)
+                )
+            }
+        }
+
+        // Photo + Cambiar foto (Supabase Storage carpeta="gatos")
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(22.dp),
@@ -730,29 +778,52 @@ fun AdminEditCatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 McCatImage(
-                    resId = cat.imageRes,
-                    contentDescription = cat.name,
+                    resId = cat?.imageRes ?: R.drawable.img_cat_manchas,
+                    contentDescription = name,
+                    imageUrl = cat?.fotoUrl,
                     modifier = Modifier
                         .size(64.dp)
                         .clip(CircleShape)
                 )
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
-                    Text(text = name, style = McTitle18)
-                    Text(text = "${cat.breed} · ${cat.sterilizationStatus}", style = McLabel11Regular)
+                    Text(text = name.ifBlank { "Nuevo paciente" }, style = McTitle18)
+                    Text(
+                        text = if (photoBytes != null) "Nueva foto lista para Supabase" else "$breed · ${cat?.sterilizationStatus ?: "Pendiente CES"}",
+                        style = McLabel11Regular
+                    )
                     Spacer(modifier = Modifier.height(6.dp))
-                    Surface(
-                        color = McSoftNeutral,
-                        shape = RoundedCornerShape(999.dp),
-                        modifier = Modifier.clickable {
-                            MiauCareRepository.showToast("Selector de foto abierto")
+                    if (!isCurrentlyFallecido) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(
+                                color = McSoftNeutral,
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier.clickable { galleryLauncher.launch("image/*") }
+                            ) {
+                                Text(
+                                    text = "Subir de galería",
+                                    style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.Bold),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                )
+                            }
+                            Surface(
+                                color = McCoralSoft,
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier.clickable {
+                                    val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.img_cat_manchas)
+                                    val bos = ByteArrayOutputStream()
+                                    bmp.compress(Bitmap.CompressFormat.JPEG, 85, bos)
+                                    photoBytes = bos.toByteArray()
+                                    MiauCareRepository.showToast("Foto de prueba cargada para Supabase")
+                                }
+                            ) {
+                                Text(
+                                    text = "Usar foto demo",
+                                    style = McLabel11Regular.copy(color = McCoralDark, fontWeight = FontWeight.Bold),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                )
+                            }
                         }
-                    ) {
-                        Text(
-                            text = "Cambiar foto",
-                            style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                        )
                     }
                 }
             }
@@ -773,141 +844,165 @@ fun AdminEditCatScreen(
                     McInputField(
                         label = "Nombre",
                         value = name,
-                        onValueChange = { name = it },
+                        onValueChange = { if (!isCurrentlyFallecido) name = it },
                         modifier = Modifier.weight(1f)
                     )
                     McInputField(
                         label = "Código",
                         value = code,
-                        onValueChange = { code = it },
+                        onValueChange = { if (!isCurrentlyFallecido) code = it },
                         modifier = Modifier.weight(1f)
                     )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     McInputField(
-                        label = "Sexo",
-                        value = sex,
-                        onValueChange = { sex = it },
+                        label = "Edad estimada",
+                        value = age,
+                        onValueChange = { if (!isCurrentlyFallecido) age = it },
                         modifier = Modifier.weight(1f)
                     )
                     McInputField(
-                        label = "Edad",
-                        value = age,
-                        onValueChange = { age = it },
+                        label = "Peso (kg)",
+                        value = weight,
+                        onValueChange = { if (!isCurrentlyFallecido) weight = it },
                         modifier = Modifier.weight(1f)
                     )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
-                McInputField(
-                    label = "Zona / colonia",
-                    value = zone,
-                    onValueChange = { zone = it }
-                )
+                Text(text = "Sexo", style = McLabel12Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Macho", "Hembra").forEach { sx ->
+                        val selected = sex.equals(sx, ignoreCase = true)
+                        McFilterPill(
+                            label = sx,
+                            selected = selected,
+                            onClick = { if (!isCurrentlyFallecido) sex = sx },
+                            unselectedBg = McSoftNeutral
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(text = "Zona / Colonia", style = McLabel12Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MiauCareRepository.colonies.forEach { zn ->
+                        McFilterPill(
+                            label = zn.name,
+                            selected = selectedZoneId == zn.numericId || zoneName.equals(zn.name, ignoreCase = true),
+                            onClick = {
+                                if (!isCurrentlyFallecido) {
+                                    selectedZoneId = zn.numericId
+                                    zoneName = zn.name
+                                }
+                            },
+                            unselectedBg = McSoftNeutral
+                        )
+                    }
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Estado de vida (`Activo` | `Fallecido`)
-        Surface(
-            color = McCardWhite,
-            shape = RoundedCornerShape(22.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(text = "Estado de vida", style = McTitle16)
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    listOf("Activo", "Fallecido").forEach { st ->
-                        val selected = lifeStatus == st
-                        Surface(
-                            color = if (selected) McBlack else McSoftNeutral,
-                            shape = RoundedCornerShape(999.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clickable { lifeStatus = st }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = st,
-                                    style = McLabel12Bold.copy(
-                                        color = if (selected) McCardWhite else McTextPrimary
+        // Estado de vida (`PATCH /api/gatos/{id}/estado-vida`)
+        if (!isNewCat && cat != null) {
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(text = "Estado de vida (PATCH /estado-vida)", style = McTitle16)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        listOf("Activo" to "ACTIVO", "Fallecido" to "FALLECIDO").forEach { (label, codeVal) ->
+                            val selected = lifeStatus == label
+                            Surface(
+                                color = if (selected) McBlack else McSoftNeutral,
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clickable {
+                                        scope.launch {
+                                            val res = MiauCareRepository.cambiarEstadoVidaGato(cat.numericId, codeVal)
+                                            when (res) {
+                                                is ApiResult.Success -> {
+                                                    lifeStatus = label
+                                                    conflict409Message = null
+                                                }
+                                                is ApiResult.Error -> {
+                                                    conflict409Message = res.message
+                                                }
+                                            }
+                                        }
+                                    }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = label,
+                                        style = McLabel12Bold.copy(
+                                            color = if (selected) McCardWhite else McTextPrimary
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-        // Historial médico
-        Surface(
-            color = McCardWhite,
-            shape = RoundedCornerShape(22.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(text = "Historial médico", style = McTitle16)
-                    Text(text = "2 entradas", style = McLabel11Regular)
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Surface(
-                    color = McBackground,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+            // Historial médico real
+            val records = MiauCareRepository.currentCatHistory
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column {
-                            Text(text = "12 nov 2026 · Esterilización", style = McBody14Bold)
-                            Text(text = "Dra. Sofía García · Sin complicaciones", style = McLabel11Regular)
-                        }
-                        Text(text = "Editar", style = McLabel11Regular)
+                        Text(text = "Historial médico", style = McTitle16)
+                        Text(text = "${records.size} entradas", style = McLabel11Regular)
                     }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Surface(
-                    color = McBackground,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(text = "03 oct 2026 · Vacunación antirrábica", style = McBody14Bold)
-                            Text(text = "Dr. Luis Pérez · Dosis anual", style = McLabel11Regular)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    if (records.isEmpty()) {
+                        Text(
+                            text = "Sin entradas clínicas registradas.",
+                            style = McLabel11Regular
+                        )
+                    } else {
+                        records.forEach { rec ->
+                            Surface(
+                                color = McBackground,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "${rec.fecha} · ${rec.diagnosticoNombre.ifBlank { rec.descripcion }}",
+                                        style = McBody14Bold
+                                    )
+                                    Text(
+                                        text = "${rec.veterinarioNombre} · ${rec.notas.ifBlank { rec.descripcion }}",
+                                        style = McLabel11Regular
+                                    )
+                                }
+                            }
                         }
-                        Text(text = "Editar", style = McLabel11Regular)
-                    }
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-                Surface(
-                    color = McSoftNeutral,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { MiauCareRepository.showToast("Entrada médica añadida") }
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(vertical = 10.dp)
-                    ) {
-                        Text(text = "+ Añadir entrada médica", style = McLabel12Bold)
                     }
                 }
             }
@@ -916,52 +1011,75 @@ fun AdminEditCatScreen(
         Spacer(modifier = Modifier.height(18.dp))
 
         McCoralButton(
-            text = "Guardar cambios",
+            text = when {
+                isCurrentlyFallecido -> "Edición bloqueada (Gato Fallecido)"
+                MiauCareRepository.isLoading -> "Guardando..."
+                else -> "Guardar cambios"
+            },
+            enabled = !isCurrentlyFallecido && !MiauCareRepository.isLoading,
             onClick = {
-                cat.name = name
-                cat.code = code
-                cat.sex = sex
-                cat.age = age
-                cat.colony = zone
-                cat.lifeStatus = lifeStatus
-                MiauCareRepository.showToast(
-                    title = if (MiauCareRepository.prototypeSimulateError) "No se pudo procesar" else "Cambios guardados",
-                    isError = MiauCareRepository.prototypeSimulateError
-                )
-                onBack()
+                scope.launch {
+                    val res = MiauCareRepository.crearOActualizarGato(
+                        existingNumericId = if (isNewCat) null else cat?.numericId,
+                        codigo = code.ifBlank { "MC-099" },
+                        nombre = name.ifBlank { "Michi" },
+                        sexoUi = sex,
+                        edadEstimada = age.ifBlank { "2 años" },
+                        raza = breed.ifBlank { "Mestizo" },
+                        peso = weight.toDoubleOrNull() ?: 3.8,
+                        condicionesEspeciales = cat?.condicionesEspeciales ?: "",
+                        zonaId = selectedZoneId,
+                        estadoInternacionBackend = cat?.estadoInternacion ?: "EN_CALLE",
+                        esterilizado = cat?.isSterilized ?: false,
+                        currentFotoUrl = cat?.fotoUrl,
+                        newPhotoBytes = photoBytes
+                    )
+                    when (res) {
+                        is ApiResult.Success -> onBack()
+                        is ApiResult.Error -> conflict409Message = res.message
+                    }
+                }
             }
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        OutlinedButton(
-            onClick = {
-                MiauCareRepository.showToast("Ficha eliminada del sistema")
-                onBack()
-            },
-            shape = RoundedCornerShape(999.dp),
-            border = BorderStroke(1.dp, McCoralBorder),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = McCoralDark),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(46.dp)
-        ) {
-            Text(text = "Eliminar del sistema", style = McLabel12Bold.copy(color = McCoralDark))
+        if (!isNewCat && cat != null) {
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val res = MiauCareRepository.eliminarGato(cat.numericId)
+                        if (res is ApiResult.Success) onBack()
+                    }
+                },
+                shape = RoundedCornerShape(999.dp),
+                border = BorderStroke(1.dp, McCoralBorder),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = McCoralDark),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+            ) {
+                Text(text = "Eliminar del sistema", style = McLabel12Bold.copy(color = McCoralDark))
+            }
         }
     }
 }
 
 // =========================================================================
-// 4. ADMINISTRADOR · APROBAR REGISTROS (`Aprobar registros` - Cake, Kiwi, Willie)
+// 4. ADMINISTRADOR · APROBAR REGISTROS (`GET /api/gatos/pendientes` & `GET /api/veterinarios/pendientes`)
 // =========================================================================
 @Composable
 fun AdminApproveRecordsScreen(
     onBack: () -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf("Pendientes") }
-    val pendingList = MiauCareRepository.pendingApprovals.filter {
-        if (selectedTab == "Pendientes") !it.isReviewed else it.isReviewed
+    val scope = rememberCoroutineScope()
+    var selectedSegment by remember { mutableStateOf("Gatos") }
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchRegistrosPendientesAprobacion()
     }
+
+    val pendingCats = MiauCareRepository.pendingApprovals.filter { !it.isReviewed }
+    val pendingVets = MiauCareRepository.pendingVetApprovals
 
     Column(
         modifier = Modifier
@@ -972,87 +1090,110 @@ fun AdminApproveRecordsScreen(
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 14.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            McBackCircleButton(onClick = onBack)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(text = "Aprobar registros", style = McTitle18)
-                Text(text = "Enviados por veterinarios", style = McLabel11Regular)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                McBackCircleButton(onClick = onBack)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(text = "Aprobar registros", style = McTitle18)
+                    Text(text = "Gatos reportados y solicitudes veterinarias", style = McLabel11Regular)
+                }
+            }
+            IconButton(onClick = { scope.launch { MiauCareRepository.fetchRegistrosPendientesAprobacion() } }) {
+                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Actualizar", tint = McTextPrimary)
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val count = MiauCareRepository.pendingApprovals.count { !it.isReviewed }
             McFilterPill(
-                label = "Pendientes · $count",
-                selected = selectedTab == "Pendientes",
-                onClick = { selectedTab = "Pendientes" },
+                label = "Gatos pendientes · ${pendingCats.size}",
+                selected = selectedSegment == "Gatos",
+                onClick = { selectedSegment = "Gatos" },
                 unselectedBg = McSoftNeutral
             )
             McFilterPill(
-                label = "Revisados",
-                selected = selectedTab == "Revisados",
-                onClick = { selectedTab = "Revisados" },
+                label = "Veterinarios · ${pendingVets.size}",
+                selected = selectedSegment == "Veterinarios",
+                onClick = { selectedSegment = "Veterinarios" },
                 unselectedBg = McSoftNeutral
             )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        pendingList.forEach { item ->
-            Surface(
-                color = McCardWhite,
-                shape = RoundedCornerShape(22.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 14.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        McCatImage(
-                            resId = item.imageRes,
-                            contentDescription = item.nameAndCode,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(CircleShape)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(text = item.nameAndCode, style = McTitle16)
-                                Surface(
-                                    color = McSoftNeutral,
-                                    shape = RoundedCornerShape(999.dp)
+        if (selectedSegment == "Gatos") {
+            if (pendingCats.isEmpty()) {
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No hay gatos pendientes de aprobación en este momento.",
+                        style = McBody14Regular,
+                        modifier = Modifier.padding(20.dp)
+                    )
+                }
+            }
+            pendingCats.forEach { item ->
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            McCatImage(
+                                resId = item.imageRes,
+                                contentDescription = item.nameAndCode,
+                                imageUrl = item.fotoUrl,
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = item.zone,
-                                        style = McLabel11Regular.copy(
-                                            color = McTextPrimary,
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 10.sp
-                                        ),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                    )
+                                    Text(text = item.nameAndCode, style = McTitle16)
+                                    Surface(
+                                        color = McSoftNeutral,
+                                        shape = RoundedCornerShape(999.dp)
+                                    ) {
+                                        Text(
+                                            text = item.zone,
+                                            style = McLabel11Regular.copy(
+                                                color = McTextPrimary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 10.sp
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
                                 }
+                                Text(text = item.breedAgeSex, style = McLabel11Regular)
+                                Text(text = item.submittedByAndTime, style = McLabel11Regular)
                             }
-                            Text(text = item.breedAgeSex, style = McLabel11Regular)
-                            Text(text = item.submittedByAndTime, style = McLabel11Regular)
                         }
-                    }
 
-                    if (!item.isReviewed) {
                         Spacer(modifier = Modifier.height(14.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             Button(
                                 onClick = {
-                                    item.isReviewed = true
-                                    MiauCareRepository.showToast("Ficha aprobada: ${item.nameAndCode}")
+                                    scope.launch {
+                                        MiauCareRepository.aprobarORechazarGato(item.numericId, aprobar = true)
+                                    }
                                 },
                                 shape = RoundedCornerShape(999.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = McCoral),
@@ -1069,8 +1210,84 @@ fun AdminApproveRecordsScreen(
                                     .weight(1f)
                                     .height(40.dp)
                                     .clickable {
-                                        item.isReviewed = true
-                                        MiauCareRepository.showToast("Ficha rechazada")
+                                        scope.launch {
+                                            MiauCareRepository.aprobarORechazarGato(item.numericId, aprobar = false)
+                                        }
+                                    }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(text = "Rechazar", style = McLabel12Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            if (pendingVets.isEmpty()) {
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No hay solicitudes de veterinarios pendientes.",
+                        style = McBody14Regular,
+                        modifier = Modifier.padding(20.dp)
+                    )
+                }
+            }
+            pendingVets.forEach { vet ->
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            McCatImage(
+                                resId = R.drawable.img_doc_sofia,
+                                contentDescription = vet.name,
+                                imageUrl = vet.fotoCedulaUrl,
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(text = vet.name, style = McTitle16)
+                                Text(text = "${vet.specialty} · Cédula: ${vet.numeroCedula}", style = McLabel11Regular)
+                                Text(text = vet.correo, style = McLabel11Regular)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        MiauCareRepository.aprobarORechazarVeterinario(vet.numericId, aprobar = true)
+                                    }
+                                },
+                                shape = RoundedCornerShape(999.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = McCoral),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                            ) {
+                                Text(text = "Aprobar", style = McLabel12Bold.copy(color = McCardWhite))
+                            }
+                            Surface(
+                                color = McSoftNeutral,
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clickable {
+                                        scope.launch {
+                                            MiauCareRepository.aprobarORechazarVeterinario(vet.numericId, aprobar = false)
+                                        }
                                     }
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
@@ -1086,19 +1303,25 @@ fun AdminApproveRecordsScreen(
 }
 
 // =========================================================================
-// 5. ADMINISTRADOR · GESTIÓN DE USUARIOS (`Gestión de usuarios`)
+// 5. ADMINISTRADOR · GESTIÓN DE USUARIOS (`GET /api/veterinarios` & `GET /api/voluntarios`)
 // =========================================================================
 @Composable
 fun AdminUsersScreen() {
+    val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("Todos") }
 
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchUsuariosEquipo()
+    }
+
     val filteredUsers = MiauCareRepository.teamUsers.filter { u ->
-        val matchesQuery = u.name.contains(searchQuery, ignoreCase = true) ||
-            u.roleLabel.contains(searchQuery, ignoreCase = true)
+        val matchesQuery = searchQuery.isBlank() ||
+                u.name.contains(searchQuery, ignoreCase = true) ||
+                u.roleLabel.contains(searchQuery, ignoreCase = true)
         val matchesTab = when (selectedFilter) {
-            "Veterinarios" -> u.roleLabel.startsWith("Veterinari")
-            "Voluntarios" -> u.roleLabel.startsWith("Voluntari")
+            "Veterinarios" -> u.isVeterinario
+            "Voluntarios" -> !u.isVeterinario
             else -> true
         }
         matchesQuery && matchesTab
@@ -1114,7 +1337,7 @@ fun AdminUsersScreen() {
             .padding(top = 14.dp, bottom = 110.dp)
     ) {
         Text(text = "Gestión de usuarios", style = McTitle24)
-        Text(text = "4 miembros del equipo", style = McBody14Regular)
+        Text(text = "${MiauCareRepository.teamUsers.size} miembros del equipo", style = McBody14Regular)
 
         Spacer(modifier = Modifier.height(14.dp))
 
@@ -1140,7 +1363,7 @@ fun AdminUsersScreen() {
         Spacer(modifier = Modifier.height(16.dp))
 
         filteredUsers.forEach { user ->
-            var activeState by remember(user.id) { mutableStateOf(user.isActive) }
+            var activeState by remember(user.id, user.isActive) { mutableStateOf(user.isActive) }
             Surface(
                 color = McCardWhite,
                 shape = RoundedCornerShape(20.dp),
@@ -1169,6 +1392,9 @@ fun AdminUsersScreen() {
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(text = user.name, style = McTitle16)
+                        if (user.correo.isNotBlank()) {
+                            Text(text = user.correo, style = McLabel11Regular)
+                        }
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Surface(
@@ -1199,12 +1425,11 @@ fun AdminUsersScreen() {
                     }
                     Switch(
                         checked = activeState,
-                        onCheckedChange = {
-                            activeState = it
-                            user.isActive = it
-                            MiauCareRepository.showToast(
-                                "${user.name}: ${if (it) "Activo" else "Inactivo"}"
-                            )
+                        onCheckedChange = { newVal ->
+                            activeState = newVal
+                            scope.launch {
+                                MiauCareRepository.cambiarEstadoUsuario(user, newVal)
+                            }
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = McCardWhite,
@@ -1218,10 +1443,11 @@ fun AdminUsersScreen() {
 }
 
 // =========================================================================
-// 6. ADMINISTRADOR · NOTIFICACIÓN GLOBAL (`Notificación global` / `Avisos`)
+// 6. ADMINISTRADOR · NOTIFICACIÓN GLOBAL (`POST /api/notificaciones`)
 // =========================================================================
 @Composable
 fun AdminBroadcastScreen() {
+    val scope = rememberCoroutineScope()
     var title by remember { mutableStateOf("Jornada de revisión felina") }
     var message by remember {
         mutableStateOf("Este sábado a las 9:00 realizaremos la ronda general en Colonia Norte.")
@@ -1271,7 +1497,7 @@ fun AdminBroadcastScreen() {
                 Column {
                     Text(text = "Un mensaje para todos", style = McBody14Bold)
                     Text(
-                        text = "El aviso llegará al instante a las cuentas seleccionadas.",
+                        text = "El aviso se guarda en la API y llega al instante a las cuentas seleccionadas.",
                         style = McLabel11Regular
                     )
                 }
@@ -1330,26 +1556,39 @@ fun AdminBroadcastScreen() {
         Spacer(modifier = Modifier.height(22.dp))
 
         McCoralButton(
-            text = "Enviar notificación",
+            text = if (MiauCareRepository.isLoading) "Enviando..." else "Enviar notificación",
+            enabled = !MiauCareRepository.isLoading,
             onClick = {
-                MiauCareRepository.showToast("Notificación global enviada a $targetGroup")
+                scope.launch {
+                    MiauCareRepository.enviarNotificacionGlobal(
+                        titulo = title,
+                        mensaje = message,
+                        destinatariosUi = targetGroup
+                    )
+                }
             }
         )
     }
 }
 
 // =========================================================================
-// 7. ADMINISTRADOR · INDICADORES POR ZONA (`Indicadores por zona`)
+// 7. ADMINISTRADOR · INDICADORES POR ZONA (`GET /api/indicadores` & `/exportar-csv`)
 // =========================================================================
 @Composable
 fun AdminZoneIndicatorsScreen(
     onBack: () -> Unit
 ) {
-    val zones = listOf(
-        Triple("Colonia Norte", "3 esterilizados · 1 en tratamiento", 0.75f),
-        Triple("Colonia Centro", "3 esterilizados · 0 en tratamiento", 0.75f),
-        Triple("Colonia Sur", "1 esterilizado · 1 en tratamiento", 0.50f)
-    )
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchIndicadoresZonas()
+    }
+
+    val indicators = MiauCareRepository.zoneIndicators
+    val totalCats = indicators.sumOf { it.gatosCensados }
+    val totalSterilized = indicators.sumOf { it.gatosEsterilizados }
+    val globalPct = if (totalCats > 0) (totalSterilized * 100 / totalCats) else 0
+    val csvPreview = MiauCareRepository.exportedCsvPreview
 
     Column(
         modifier = Modifier
@@ -1360,12 +1599,29 @@ fun AdminZoneIndicatorsScreen(
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 14.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            McBackCircleButton(onClick = onBack)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(text = "Indicadores por zona", style = McTitle18)
-                Text(text = "Cobertura y estado del censo", style = McLabel11Regular)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                McBackCircleButton(onClick = onBack)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(text = "Indicadores por zona", style = McTitle18)
+                    Text(text = "Cobertura y estado del censo", style = McLabel11Regular)
+                }
+            }
+            Button(
+                onClick = {
+                    scope.launch {
+                        MiauCareRepository.exportarIndicadoresCsv()
+                    }
+                },
+                shape = RoundedCornerShape(999.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = McBlack)
+            ) {
+                Text("Exportar CSV", style = McLabel11Regular.copy(color = McCardWhite, fontWeight = FontWeight.Bold))
             }
         }
 
@@ -1373,13 +1629,13 @@ fun AdminZoneIndicatorsScreen(
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             AdminKpiBox(
-                number = "10",
+                number = "$totalCats",
                 label = "Gatos censados",
                 isCoral = false,
                 modifier = Modifier.weight(1f)
             )
             AdminKpiBox(
-                number = "70%",
+                number = "$globalPct%",
                 label = "Esterilizados",
                 isCoral = true,
                 modifier = Modifier.weight(1f)
@@ -1388,8 +1644,10 @@ fun AdminZoneIndicatorsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        zones.forEachIndexed { idx, (name, details, pct) ->
-            val catsCount = if (idx == 2) "2 gatos" else "4 gatos"
+        indicators.forEach { ind ->
+            val pct = if (ind.gatosCensados > 0) {
+                (ind.gatosEsterilizados.toFloat() / ind.gatosCensados.toFloat()).coerceIn(0f, 1f)
+            } else 0f
             Surface(
                 color = McCardWhite,
                 shape = RoundedCornerShape(22.dp),
@@ -1415,8 +1673,11 @@ fun AdminZoneIndicatorsScreen(
                             }
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
-                                Text(text = name, style = McTitle16)
-                                Text(text = details, style = McLabel11Regular)
+                                Text(text = ind.nombreZona, style = McTitle16)
+                                Text(
+                                    text = "${ind.gatosEsterilizados} esterilizados · ${ind.gatosHospitalizados} hospitalizados",
+                                    style = McLabel11Regular
+                                )
                             }
                         }
                         Surface(
@@ -1424,7 +1685,7 @@ fun AdminZoneIndicatorsScreen(
                             shape = RoundedCornerShape(999.dp)
                         ) {
                             Text(
-                                text = catsCount,
+                                text = "${ind.gatosCensados} gatos",
                                 style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.Bold),
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             )
@@ -1452,10 +1713,41 @@ fun AdminZoneIndicatorsScreen(
             }
         }
     }
+
+    if (csvPreview != null) {
+        Dialog(onDismissRequest = { MiauCareRepository.exportedCsvPreview = null }) {
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(text = "CSV Exportado (/api/indicadores/exportar-csv)", style = McTitle16)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        color = McBackground,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = csvPreview,
+                            style = McLabel11Regular.copy(color = McTextPrimary),
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                    McCoralButton(
+                        text = "Cerrar",
+                        onClick = { MiauCareRepository.exportedCsvPreview = null }
+                    )
+                }
+            }
+        }
+    }
 }
 
 // =========================================================================
-// 8. ADMINISTRADOR · AUDITORÍA (`Auditoría`)
+// 8. ADMINISTRADOR · AUDITORÍA (`GET /api/auditoria`)
 // =========================================================================
 @Composable
 fun AdminAuditScreen(
@@ -1464,8 +1756,17 @@ fun AdminAuditScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("Todas") }
 
+    LaunchedEffect(selectedFilter, searchQuery) {
+        val catFilter = if (selectedFilter == "Todas") null else selectedFilter.uppercase()
+        MiauCareRepository.fetchAuditoria(tipoAccion = catFilter, buscar = searchQuery.ifBlank { null })
+    }
+
     val grouped = MiauCareRepository.auditLogs
-        .filter { it.title.contains(searchQuery, ignoreCase = true) }
+        .filter {
+            searchQuery.isBlank() ||
+                    it.title.contains(searchQuery, ignoreCase = true) ||
+                    it.subtitle.contains(searchQuery, ignoreCase = true)
+        }
         .groupBy { it.dateGroup }
 
     Column(
@@ -1561,22 +1862,28 @@ fun AdminAuditScreen(
 }
 
 // =========================================================================
-// 9. ADMINISTRADOR · PROGRAMAR RONDA (`Programar ronda`)
+// 9. ADMINISTRADOR · PROGRAMAR RONDA (`POST /api/rondas` + RN-01 409 Conflict Modal)
 // =========================================================================
 @Composable
 fun AdminScheduleRoundScreen(
     onBack: () -> Unit
 ) {
-    var selectedResponsible by remember { mutableStateOf("Sofía Álvarez") }
-    var notes by remember {
-        mutableStateOf("Revisión general y control de puntos de alimentación.")
+    val scope = rememberCoroutineScope()
+    var selectedZoneId by remember { mutableLongStateOf(1L) }
+    var selectedVeterinarioId by remember { mutableLongStateOf(1L) }
+    var fechaInput by remember { mutableStateOf("2026-11-21") }
+    var horaInicioInput by remember { mutableStateOf("09:00") }
+    var horaFinInput by remember { mutableStateOf("11:00") }
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchZonasResumen()
+        MiauCareRepository.fetchUsuariosEquipo()
+        MiauCareRepository.fetchRondas()
+        MiauCareRepository.colonies.firstOrNull()?.let { selectedZoneId = it.numericId }
+        MiauCareRepository.doctors.firstOrNull()?.let { selectedVeterinarioId = it.numericId }
     }
 
-    val members = listOf(
-        "Sofía Álvarez" to "Voluntaria · Colonia Norte",
-        "Dra. Sofía García" to "Veterinaria · Cirugía CES",
-        "Dr. Luis Pérez" to "Veterinario · Medicina general"
-    )
+    val vetMembers = MiauCareRepository.doctors
 
     Column(
         modifier = Modifier
@@ -1592,7 +1899,7 @@ fun AdminScheduleRoundScreen(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(text = "Programar ronda", style = McTitle18)
-                Text(text = "Asignar visita a una colonia", style = McLabel11Regular)
+                Text(text = "Asignar visita a una colonia (RN-01)", style = McLabel11Regular)
             }
         }
 
@@ -1604,145 +1911,170 @@ fun AdminScheduleRoundScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(text = "Colonia", style = McLabel12Bold)
+                Text(text = "Colonia / Zona", style = McLabel12Bold)
                 Spacer(modifier = Modifier.height(6.dp))
-                Surface(
-                    color = McBackground,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = "Parque Norte · Colonia Norte", style = McBody14Bold)
-                        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null)
+                    MiauCareRepository.colonies.forEach { zn ->
+                        McFilterPill(
+                            label = zn.name,
+                            selected = selectedZoneId == zn.numericId,
+                            onClick = { selectedZoneId = zn.numericId },
+                            unselectedBg = McSoftNeutral
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+                McInputField(
+                    label = "Fecha (YYYY-MM-DD)",
+                    value = fechaInput,
+                    onValueChange = { fechaInput = it }
+                )
+                Spacer(modifier = Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Fecha", style = McLabel12Bold)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Surface(
-                            color = McBackground,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Sábado, 14 nov",
-                                style = McBody14Bold,
-                                modifier = Modifier.padding(14.dp)
-                            )
-                        }
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Hora", style = McLabel12Bold)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Surface(
-                            color = McBackground,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "09:00",
-                                style = McBody14Bold,
-                                modifier = Modifier.padding(14.dp)
-                            )
-                        }
-                    }
+                    McInputField(
+                        label = "Hora inicio (HH:mm)",
+                        value = horaInicioInput,
+                        onValueChange = { horaInicioInput = it },
+                        modifier = Modifier.weight(1f)
+                    )
+                    McInputField(
+                        label = "Hora fin (HH:mm)",
+                        value = horaFinInput,
+                        onValueChange = { horaFinInput = it },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
-                Text(text = "Responsable", style = McLabel12Bold)
+                Text(text = "Veterinario Responsable", style = McLabel12Bold)
                 Spacer(modifier = Modifier.height(8.dp))
 
-                members.forEach { (name, role) ->
-                    val selected = selectedResponsible == name
-                    Surface(
-                        color = if (selected) McCoralSoft else McBackground,
-                        shape = RoundedCornerShape(16.dp),
-                        border = if (selected) BorderStroke(1.dp, McCoralBorder) else null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 8.dp)
-                            .clickable { selectedResponsible = name }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                if (vetMembers.isEmpty()) {
+                    Text(
+                        text = "Cargando veterinarios disponibles...",
+                        style = McLabel11Regular
+                    )
+                } else {
+                    vetMembers.forEach { doc ->
+                        val selected = selectedVeterinarioId == doc.numericId
+                        Surface(
+                            color = if (selected) McCoralSoft else McBackground,
+                            shape = RoundedCornerShape(16.dp),
+                            border = if (selected) BorderStroke(1.dp, McCoralBorder) else null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .clickable { selectedVeterinarioId = doc.numericId }
                         ) {
-                            Surface(
-                                color = McCardWhite,
-                                shape = CircleShape,
-                                modifier = Modifier.size(36.dp)
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(imageVector = Icons.Outlined.PersonOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = name, style = McBody14Bold)
-                                Text(text = role, style = McLabel11Regular)
-                            }
-                            if (selected) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .clip(CircleShape)
-                                        .background(McCoral),
-                                    contentAlignment = Alignment.Center
+                                Surface(
+                                    color = McCardWhite,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(36.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = null,
-                                        tint = McCardWhite,
-                                        modifier = Modifier.size(13.dp)
-                                    )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(imageVector = Icons.Outlined.PersonOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = doc.name, style = McBody14Bold)
+                                    Text(text = "${doc.specialty} · ${doc.patientsLoadText}", style = McLabel11Regular)
+                                }
+                                if (selected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(CircleShape)
+                                            .background(McCoral),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = McCardWhite,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                McInputField(
-                    label = "Notas",
-                    value = notes,
-                    onValueChange = { notes = it },
-                    singleLine = false,
-                    minLines = 2
-                )
             }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
         McCoralButton(
-            text = "Guardar ronda",
+            text = if (MiauCareRepository.isLoading) "Guardando ronda..." else "Guardar ronda",
+            enabled = !MiauCareRepository.isLoading,
             onClick = {
-                MiauCareRepository.showToast("Ronda programada para $selectedResponsible")
-                onBack()
+                scope.launch {
+                    val res = MiauCareRepository.programarRondaAdmin(
+                        zonaId = selectedZoneId,
+                        fechaIso = fechaInput.trim(),
+                        horaInicioIso = horaInicioInput.trim(),
+                        horaFinIso = horaFinInput.trim(),
+                        veterinarioId = selectedVeterinarioId
+                    )
+                    if (res is ApiResult.Success) onBack()
+                }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        McSoftButton(
+            text = "Guardar y repetir mismo horario (Probar RN-01 409)",
+            onClick = {
+                scope.launch {
+                    MiauCareRepository.programarRondaAdmin(
+                        zonaId = selectedZoneId,
+                        fechaIso = fechaInput.trim(),
+                        horaInicioIso = horaInicioInput.trim(),
+                        horaFinIso = horaFinInput.trim(),
+                        veterinarioId = selectedVeterinarioId
+                    )
+                    MiauCareRepository.programarRondaAdmin(
+                        zonaId = selectedZoneId,
+                        fechaIso = fechaInput.trim(),
+                        horaInicioIso = horaInicioInput.trim(),
+                        horaFinIso = horaFinInput.trim(),
+                        veterinarioId = selectedVeterinarioId
+                    )
+                }
             }
         )
     }
 }
 
 // =========================================================================
-// 10. ADMINISTRADOR · COLONIAS Y ZONAS + MODAL AÑADIR COLONIA (`Colonias y zonas`)
+// 10. ADMINISTRADOR · COLONIAS Y ZONAS (`GET / POST / DELETE /api/zonas`)
 // =========================================================================
 @Composable
 fun AdminColoniesScreen(
     onBack: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     var selectedFilter by remember { mutableStateOf("Todas") }
     var showAddColonyModal by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchZonasResumen()
+    }
+
     val filtered = MiauCareRepository.colonies.filter {
-        selectedFilter == "Todas" || it.zoneName == selectedFilter
+        selectedFilter == "Todas" || it.zoneName.contains(selectedFilter, ignoreCase = true)
     }
 
     Column(
@@ -1764,7 +2096,7 @@ fun AdminColoniesScreen(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(text = "Colonias y zonas", style = McTitle18)
-                    Text(text = "Puntos de alimentación y rondas", style = McLabel11Regular)
+                    Text(text = "Puntos de alimentación y coordenadas GPS", style = McLabel11Regular)
                 }
             }
             Surface(
@@ -1777,22 +2109,6 @@ fun AdminColoniesScreen(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(imageVector = Icons.Default.Add, contentDescription = "Añadir", tint = McCardWhite)
                 }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf("Todas", "Colonia Norte", "Colonia Centro").forEach { tab ->
-                McFilterPill(
-                    label = tab,
-                    selected = selectedFilter == tab,
-                    onClick = { selectedFilter = tab },
-                    unselectedBg = McSoftNeutral
-                )
             }
         }
 
@@ -1825,8 +2141,13 @@ fun AdminColoniesScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(text = col.name, style = McTitle16)
-                                Text(text = "${col.zoneName} · ${col.address}", style = McLabel11Regular)
-                                Text(text = "Alimentación: ${col.feedingTime}", style = McLabel11Regular)
+                                Text(text = col.address, style = McLabel11Regular)
+                                val latStr = String.format(Locale.US, "%.4f", col.latitud ?: 4.6097)
+                                val lonStr = String.format(Locale.US, "%.4f", col.longitud ?: -74.0817)
+                                Text(
+                                    text = "Alimentación: ${col.feedingTime} · GPS ($latStr, $lonStr)",
+                                    style = McLabel11Regular
+                                )
                             }
                         }
                         Surface(
@@ -1843,30 +2164,19 @@ fun AdminColoniesScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Surface(
-                            color = McSoftNeutral,
-                            shape = RoundedCornerShape(999.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(36.dp)
-                                .clickable { showAddColonyModal = true }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(text = "Editar", style = McLabel12Bold)
-                            }
-                        }
-                        Surface(
                             color = McCoralSoft,
                             shape = RoundedCornerShape(999.dp),
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .height(36.dp)
                                 .clickable {
-                                    MiauCareRepository.colonies.remove(col)
-                                    MiauCareRepository.showToast("Colonia eliminada")
+                                    scope.launch {
+                                        MiauCareRepository.eliminarZona(col.numericId)
+                                    }
                                 }
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text(text = "Eliminar", style = McLabel12Bold.copy(color = McCoralDark))
+                                Text(text = "Eliminar zona", style = McLabel12Bold.copy(color = McCoralDark))
                             }
                         }
                     }
@@ -1876,10 +2186,12 @@ fun AdminColoniesScreen(
     }
 
     if (showAddColonyModal) {
-        var colName by remember { mutableStateOf("Mirador del Río") }
-        var colZone by remember { mutableStateOf("Colonia Norte") }
-        var colAddress by remember { mutableStateOf("Av. del Río, 24") }
+        var colName by remember { mutableStateOf("Colonia Chapinero") }
+        var colZone by remember { mutableStateOf("Zona Norte") }
+        var colAddress by remember { mutableStateOf("Parque de los Hippies, Bogotá") }
         var colTime by remember { mutableStateOf("08:30") }
+        var colLat by remember { mutableStateOf("4.6425") }
+        var colLon by remember { mutableStateOf("-74.0631") }
 
         Dialog(onDismissRequest = { showAddColonyModal = false }) {
             Surface(
@@ -1894,8 +2206,8 @@ fun AdminColoniesScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
-                            Text(text = "Añadir colonia", style = McTitle18)
-                            Text(text = "Nuevo punto de alimentación", style = McLabel11Regular)
+                            Text(text = "Añadir colonia / zona", style = McTitle18)
+                            Text(text = "POST /api/zonas con coordenadas GPS", style = McLabel11Regular)
                         }
                         Surface(
                             color = McSoftNeutral,
@@ -1912,27 +2224,32 @@ fun AdminColoniesScreen(
                     Spacer(modifier = Modifier.height(14.dp))
                     McInputField(label = "Nombre de la colonia", value = colName, onValueChange = { colName = it })
                     Spacer(modifier = Modifier.height(10.dp))
-                    McInputField(label = "Zona", value = colZone, onValueChange = { colZone = it })
+                    McInputField(label = "Zona macro", value = colZone, onValueChange = { colZone = it })
                     Spacer(modifier = Modifier.height(10.dp))
-                    McInputField(label = "Dirección / referencia", value = colAddress, onValueChange = { colAddress = it })
+                    McInputField(label = "Dirección / punto alimentación", value = colAddress, onValueChange = { colAddress = it })
                     Spacer(modifier = Modifier.height(10.dp))
                     McInputField(label = "Horario de alimentación", value = colTime, onValueChange = { colTime = it })
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        McInputField(label = "Latitud", value = colLat, onValueChange = { colLat = it }, modifier = Modifier.weight(1f))
+                        McInputField(label = "Longitud", value = colLon, onValueChange = { colLon = it }, modifier = Modifier.weight(1f))
+                    }
                     Spacer(modifier = Modifier.height(18.dp))
                     McCoralButton(
                         text = "Guardar colonia",
                         onClick = {
-                            MiauCareRepository.colonies.add(
-                                ColonyItem(
-                                    id = "col-${System.currentTimeMillis()}",
-                                    name = colName,
-                                    zoneName = colZone,
-                                    address = colAddress,
-                                    feedingTime = colTime,
-                                    catsCountText = "0 gatos"
+                            scope.launch {
+                                val res = MiauCareRepository.crearOActualizarZona(
+                                    id = null,
+                                    nombre = colName,
+                                    zonaMacro = colZone,
+                                    puntoAlimentacion = colAddress,
+                                    horaAlimentacion = colTime,
+                                    latitud = colLat.toDoubleOrNull() ?: 4.6097,
+                                    longitud = colLon.toDoubleOrNull() ?: -74.0817
                                 )
-                            )
-                            showAddColonyModal = false
-                            MiauCareRepository.showToast("Colonia guardada")
+                                if (res is ApiResult.Success) showAddColonyModal = false
+                            }
                         }
                     )
                 }
@@ -1948,23 +2265,19 @@ fun AdminColoniesScreen(
 fun AdminCatalogsScreen(
     onBack: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     var activeSegment by remember { mutableStateOf("Zonas") }
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchCatalogosMaestros()
+        MiauCareRepository.fetchZonasResumen()
+    }
+
     val items = when (activeSegment) {
-        "Estados" -> listOf(
-            "En calle" to "Gato comunitario monitoreado en colonia",
-            "Hospitalizado" to "En observación clínica veterinaria",
-            "Adoptado" to "Integrado en hogar definitivo"
-        )
-        "Diagnósticos" -> listOf(
-            "Deshidratación moderada" to "Requiere fluidoterapia subcutánea",
-            "FIV+ (Inmunodeficiencia)" to "Monitoreo periódico de peso y mucosas",
-            "Valoración prequirúrgica CES" to "Apto para protocolo de esterilización"
-        )
-        else -> listOf(
-            "Colonia Norte" to "4 gatos · Parque Norte",
-            "Colonia Centro" to "4 gatos · Plaza Mayor",
-            "Colonia Sur" to "2 gatos · Jardín del Sur"
-        )
+        "Especialidades" -> MiauCareRepository.especialidadesCatalog.map { Triple(it.id, it.nombre, "Especialidad médica veterinaria") }
+        "Diagnósticos" -> MiauCareRepository.diagnosticosCatalog.map { Triple(it.id, it.nombre, it.descripcion.ifBlank { "Diagnóstico clínico" }) }
+        else -> MiauCareRepository.colonies.map { Triple(it.numericId, it.name, "${it.catsCountText} · ${it.address}") }
     }
 
     Column(
@@ -1988,7 +2301,7 @@ fun AdminCatalogsScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Zonas", "Estados", "Diagnósticos").forEach { seg ->
+            listOf("Zonas", "Especialidades", "Diagnósticos").forEach { seg ->
                 McFilterPill(
                     label = seg,
                     selected = activeSegment == seg,
@@ -2001,13 +2314,13 @@ fun AdminCatalogsScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         McCoralButton(
-            text = "+ Añadir elemento",
-            onClick = { MiauCareRepository.showToast("Nuevo elemento añadido a $activeSegment") }
+            text = "+ Añadir elemento a $activeSegment",
+            onClick = { showAddDialog = true }
         )
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        items.forEach { (title, desc) ->
+        items.forEach { (id, title, desc) ->
             Surface(
                 color = McCardWhite,
                 shape = RoundedCornerShape(18.dp),
@@ -2024,23 +2337,15 @@ fun AdminCatalogsScreen(
                         Text(text = desc, style = McLabel11Regular)
                     }
                     Surface(
-                        color = McSoftNeutral,
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clickable { MiauCareRepository.showToast("Editar $title") }
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(imageVector = Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
                         color = McCoralSoft,
                         shape = CircleShape,
                         modifier = Modifier
                             .size(34.dp)
-                            .clickable { MiauCareRepository.showToast("Elemento eliminado") }
+                            .clickable {
+                                scope.launch {
+                                    MiauCareRepository.eliminarItemCatalogo(activeSegment, id)
+                                }
+                            }
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(imageVector = Icons.Outlined.DeleteOutline, contentDescription = null, tint = McCoralDark, modifier = Modifier.size(16.dp))
@@ -2050,20 +2355,55 @@ fun AdminCatalogsScreen(
             }
         }
     }
+
+    if (showAddDialog) {
+        var newName by remember { mutableStateOf("") }
+        Dialog(onDismissRequest = { showAddDialog = false }) {
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(text = "Nuevo en $activeSegment", style = McTitle18)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    McInputField(label = "Nombre", value = newName, onValueChange = { newName = it })
+                    Spacer(modifier = Modifier.height(16.dp))
+                    McCoralButton(
+                        text = "Guardar",
+                        onClick = {
+                            scope.launch {
+                                val res = MiauCareRepository.crearItemCatalogo(activeSegment, newName)
+                                if (res is ApiResult.Success) showAddDialog = false
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
 }
 
 // =========================================================================
-// 12. ADMINISTRADOR · DIRECTORIO Y REASIGNACIÓN (`Directorio y reasignación`)
+// 12. ADMINISTRADOR · DIRECTORIO Y REASIGNACIÓN (`POST /api/gatos/reasignar-masivo`)
 // =========================================================================
 @Composable
 fun AdminMedicalDirectoryScreen(
     onBack: () -> Unit
 ) {
-    var selectedSegment by remember { mutableStateOf("Internos") }
-    var showReassignModal by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var selectedSegment by remember { mutableStateOf("Todos") }
+    var reassignFromDoc by remember { mutableStateOf<DoctorItem?>(null) }
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchVeterinariosDirectorio()
+    }
 
     val docs = MiauCareRepository.doctors.filter {
-        if (selectedSegment == "Internos") it.isInternal else !it.isInternal
+        when (selectedSegment) {
+            "Disponibles" -> it.disponibleEmergencias
+            else -> true
+        }
     }
 
     Column(
@@ -2080,7 +2420,7 @@ fun AdminMedicalDirectoryScreen(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(text = "Directorio médico", style = McTitle18)
-                Text(text = "Internos y colaboradores externos", style = McLabel11Regular)
+                Text(text = "Gestión y reasignación masiva de pacientes", style = McLabel11Regular)
             }
         }
 
@@ -2088,15 +2428,15 @@ fun AdminMedicalDirectoryScreen(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             McFilterPill(
-                label = "Internos · 2",
-                selected = selectedSegment == "Internos",
-                onClick = { selectedSegment = "Internos" },
+                label = "Todos · ${MiauCareRepository.doctors.size}",
+                selected = selectedSegment == "Todos",
+                onClick = { selectedSegment = "Todos" },
                 unselectedBg = McSoftNeutral
             )
             McFilterPill(
-                label = "Externos · 2",
-                selected = selectedSegment == "Externos",
-                onClick = { selectedSegment = "Externos" },
+                label = "Disponibles · ${MiauCareRepository.doctors.count { it.disponibleEmergencias }}",
+                selected = selectedSegment == "Disponibles",
+                onClick = { selectedSegment = "Disponibles" },
                 unselectedBg = McSoftNeutral
             )
         }
@@ -2128,7 +2468,7 @@ fun AdminMedicalDirectoryScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(text = doc.name, style = McTitle16)
-                                McStatusBadge(label = "Activo")
+                                McStatusBadge(label = if (doc.disponibleEmergencias) "Activo" else "Pausado")
                             }
                             Text(text = doc.specialty, style = McLabel11Regular)
                             Text(text = doc.patientsLoadText, style = McLabel11Regular)
@@ -2141,7 +2481,7 @@ fun AdminMedicalDirectoryScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(38.dp)
-                            .clickable { showReassignModal = true }
+                            .clickable { reassignFromDoc = doc }
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(text = "Reasignar pacientes", style = McLabel12Bold)
@@ -2152,9 +2492,13 @@ fun AdminMedicalDirectoryScreen(
         }
     }
 
-    if (showReassignModal) {
-        var targetVet by remember { mutableStateOf("Dr. Luis Pérez") }
-        Dialog(onDismissRequest = { showReassignModal = false }) {
+    if (reassignFromDoc != null) {
+        val fromDoc = reassignFromDoc!!
+        val candidates = MiauCareRepository.doctors.filter { it.numericId != fromDoc.numericId }
+            .ifEmpty { MiauCareRepository.doctors }
+        var targetVetId by remember { mutableLongStateOf(candidates.firstOrNull()?.numericId ?: 1L) }
+
+        Dialog(onDismissRequest = { reassignFromDoc = null }) {
             Surface(
                 color = McCardWhite,
                 shape = RoundedCornerShape(28.dp),
@@ -2168,14 +2512,14 @@ fun AdminMedicalDirectoryScreen(
                     ) {
                         Column {
                             Text(text = "Reasignar pacientes", style = McTitle18)
-                            Text(text = "Dra. Sofía García · 8 pacientes", style = McLabel11Regular)
+                            Text(text = "Origen: ${fromDoc.name}", style = McLabel11Regular)
                         }
                         Surface(
                             color = McSoftNeutral,
                             shape = CircleShape,
                             modifier = Modifier
                                 .size(30.dp)
-                                .clickable { showReassignModal = false }
+                                .clickable { reassignFromDoc = null }
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(imageVector = Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -2185,11 +2529,8 @@ fun AdminMedicalDirectoryScreen(
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(text = "Selecciona el veterinario receptor", style = McLabel12Bold)
                     Spacer(modifier = Modifier.height(8.dp))
-                    listOf(
-                        "Dr. Luis Pérez" to "Interno · 2 pacientes a cargo",
-                        "Dr. Mateo Ruiz" to "Colaborador externo · Cirugía"
-                    ).forEach { (name, sub) ->
-                        val selected = targetVet == name
+                    candidates.forEach { cand ->
+                        val selected = targetVetId == cand.numericId
                         Surface(
                             color = if (selected) McCoralSoft else McBackground,
                             shape = RoundedCornerShape(16.dp),
@@ -2197,15 +2538,15 @@ fun AdminMedicalDirectoryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 8.dp)
-                                .clickable { targetVet = name }
+                                .clickable { targetVetId = cand.numericId }
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = name, style = McBody14Bold)
-                                    Text(text = sub, style = McLabel11Regular)
+                                    Text(text = cand.name, style = McBody14Bold)
+                                    Text(text = "${cand.specialty} · ${cand.patientsLoadText}", style = McLabel11Regular)
                                 }
                                 if (selected) {
                                     Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, tint = McCoral)
@@ -2215,10 +2556,12 @@ fun AdminMedicalDirectoryScreen(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     McCoralButton(
-                        text = "Confirmar reasignación",
+                        text = "Confirmar reasignación masiva",
                         onClick = {
-                            showReassignModal = false
-                            MiauCareRepository.showToast("Pacientes reasignados a $targetVet")
+                            reassignFromDoc = null
+                            scope.launch {
+                                MiauCareRepository.reasignarPacientesMasivo(fromDoc.numericId, targetVetId)
+                            }
                         }
                     )
                 }
@@ -2228,12 +2571,18 @@ fun AdminMedicalDirectoryScreen(
 }
 
 // =========================================================================
-// 13. ADMINISTRADOR · PARÁMETROS DEL SISTEMA (`Parámetros del sistema`)
+// 13. ADMINISTRADOR · PARÁMETROS DEL SISTEMA (`GET / PUT /api/parametros`)
 // =========================================================================
 @Composable
 fun AdminSystemParamsScreen(
     onBack: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchParametrosSistema()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2248,7 +2597,7 @@ fun AdminSystemParamsScreen(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(text = "Parámetros del sistema", style = McTitle18)
-                Text(text = "Reglas y tiempos de alerta", style = McLabel11Regular)
+                Text(text = "Reglas y tiempos de alerta (RN-03)", style = McLabel11Regular)
             }
         }
 
@@ -2278,7 +2627,7 @@ fun AdminSystemParamsScreen(
                 Column {
                     Text(text = "Reglas automáticas", style = McBody14Bold)
                     Text(
-                        text = "Estos valores definen cuándo el sistema genera alertas o reasigna casos.",
+                        text = "Estos valores definen cuándo el backend genera alertas o escala prioridad.",
                         style = McLabel11Regular
                     )
                 }
@@ -2295,6 +2644,10 @@ fun AdminSystemParamsScreen(
             onIncrement = {
                 val next = (MiauCareRepository.daysWithoutSightingX.toIntOrNull() ?: 7) + 1
                 MiauCareRepository.daysWithoutSightingX = next.toString()
+            },
+            onDecrement = {
+                val prev = ((MiauCareRepository.daysWithoutSightingX.toIntOrNull() ?: 7) - 1).coerceAtLeast(1)
+                MiauCareRepository.daysWithoutSightingX = prev.toString()
             }
         )
 
@@ -2306,6 +2659,10 @@ fun AdminSystemParamsScreen(
             onIncrement = {
                 val next = (MiauCareRepository.consecutiveCriticalN.toIntOrNull() ?: 3) + 1
                 MiauCareRepository.consecutiveCriticalN = next.toString()
+            },
+            onDecrement = {
+                val prev = ((MiauCareRepository.consecutiveCriticalN.toIntOrNull() ?: 3) - 1).coerceAtLeast(1)
+                MiauCareRepository.consecutiveCriticalN = prev.toString()
             }
         )
 
@@ -2317,16 +2674,23 @@ fun AdminSystemParamsScreen(
             onIncrement = {
                 val next = (MiauCareRepository.maxResponseHoursT.toIntOrNull() ?: 24) + 2
                 MiauCareRepository.maxResponseHoursT = next.toString()
+            },
+            onDecrement = {
+                val prev = ((MiauCareRepository.maxResponseHoursT.toIntOrNull() ?: 24) - 2).coerceAtLeast(1)
+                MiauCareRepository.maxResponseHoursT = prev.toString()
             }
         )
 
         Spacer(modifier = Modifier.height(18.dp))
 
         McCoralButton(
-            text = "Guardar parámetros",
+            text = if (MiauCareRepository.isLoading) "Guardando..." else "Guardar parámetros",
+            enabled = !MiauCareRepository.isLoading,
             onClick = {
-                MiauCareRepository.showToast("Parámetros del sistema actualizados")
-                onBack()
+                scope.launch {
+                    val res = MiauCareRepository.guardarParametrosSistema()
+                    if (res is ApiResult.Success) onBack()
+                }
             }
         )
     }
@@ -2338,7 +2702,8 @@ private fun AdminParamCard(
     description: String,
     value: String,
     unit: String,
-    onIncrement: () -> Unit
+    onIncrement: () -> Unit,
+    onDecrement: () -> Unit
 ) {
     Surface(
         color = McCardWhite,
@@ -2352,7 +2717,18 @@ private fun AdminParamCard(
             Spacer(modifier = Modifier.height(2.dp))
             Text(text = description, style = McLabel11Regular)
             Spacer(modifier = Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    color = McSoftNeutral,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clickable { onDecrement() }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("-", style = McTitle16)
+                    }
+                }
                 Surface(
                     color = McBackground,
                     shape = RoundedCornerShape(10.dp),
@@ -2364,7 +2740,17 @@ private fun AdminParamCard(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = McSoftNeutral,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clickable { onIncrement() }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("+", style = McTitle16)
+                    }
+                }
                 Text(text = unit, style = McLabel11Regular)
             }
         }
@@ -2372,15 +2758,17 @@ private fun AdminParamCard(
 }
 
 // =========================================================================
-// 14. ADMINISTRADOR · MI PERFIL (`Mi perfil`)
+// 14. ADMINISTRADOR · MI PERFIL (`PUT /api/administradores/{id}`)
 // =========================================================================
 @Composable
 fun AdminProfileScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit
 ) {
-    var name by remember { mutableStateOf("Ana") }
-    var email by remember { mutableStateOf("admin@miaucare.org") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf(MiauCareRepository.sessionUserName.ifBlank { "Administrador MiauCare" }) }
+    var email by remember { mutableStateOf(MiauCareRepository.sessionUserEmail.ifBlank { "adminmiaucare@administrador.com" }) }
 
     Column(
         modifier = Modifier
@@ -2402,7 +2790,7 @@ fun AdminProfileScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Admin identity card (`AN`, `Ana`, `Administradora`, `Cuenta activa`)
+        // Admin identity card
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(22.dp),
@@ -2419,7 +2807,7 @@ fun AdminProfileScreen(
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
-                            text = "AN",
+                            text = name.take(2).uppercase(),
                             style = McTitle18.copy(color = McCoralDark)
                         )
                     }
@@ -2427,7 +2815,7 @@ fun AdminProfileScreen(
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
                     Text(text = name, style = McTitle18)
-                    Text(text = "Administradora", style = McLabel11Regular)
+                    Text(text = "Administrador", style = McLabel11Regular)
                     Spacer(modifier = Modifier.height(4.dp))
                     McStatusBadge(label = "Cuenta activa")
                 }
@@ -2445,39 +2833,6 @@ fun AdminProfileScreen(
                 McInputField(label = "Nombre", value = name, onValueChange = { name = it })
                 Spacer(modifier = Modifier.height(12.dp))
                 McInputField(label = "Correo electrónico", value = email, onValueChange = { email = it })
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Rol", style = McLabel12Bold)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Surface(
-                            color = McSoftNeutral,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Administrador general",
-                                style = McLabel11Regular.copy(color = McTextPrimary),
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Estado de cuenta", style = McLabel12Bold)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Surface(
-                            color = McSoftNeutral,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Activa",
-                                style = McLabel11Regular.copy(color = McTextPrimary),
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
-                }
             }
         }
 
@@ -2485,14 +2840,24 @@ fun AdminProfileScreen(
 
         McCoralButton(
             text = "Guardar cambios",
-            onClick = { MiauCareRepository.showToast("Perfil actualizado") }
+            onClick = {
+                scope.launch {
+                    MiauCareRepository.actualizarPerfilAdmin(
+                        nombre = name,
+                        correo = email
+                    )
+                }
+            }
         )
 
         Spacer(modifier = Modifier.height(10.dp))
 
         McSoftButton(
             text = "Cerrar sesión",
-            onClick = onLogout
+            onClick = {
+                MiauCareRepository.logout(context)
+                onLogout()
+            }
         )
     }
 }

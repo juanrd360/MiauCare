@@ -1,5 +1,9 @@
 package com.example.miaucare.ui.screens
 
+import android.Manifest
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -34,13 +39,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.miaucare.R
+import com.example.miaucare.data.ApiResult
 import com.example.miaucare.data.CatProfile
+import com.example.miaucare.data.MiauCareApiClient
 import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.data.MiauRole
-import com.example.miaucare.data.SightingRecord
 import com.example.miaucare.ui.components.*
 import com.example.miaucare.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // =========================================================================
 // 1. SPLASH INICIO (`Splash Inicio`)
@@ -49,8 +56,12 @@ import kotlinx.coroutines.delay
 fun SplashScreen(
     onFinished: () -> Unit
 ) {
+    val context = LocalContext.current
     LaunchedEffect(Unit) {
-        delay(1500)
+        MiauCareRepository.initSession(context)
+        MiauCareRepository.fetchZonasResumen()
+        MiauCareRepository.fetchCatalogosMaestros()
+        delay(1200)
         onFinished()
     }
 
@@ -82,6 +93,7 @@ fun BienvenidaScreen(
     onRegisterVeterinarioClick: () -> Unit,
     onQuickRoleJump: (MiauRole) -> Unit
 ) {
+    val context = LocalContext.current
     var showRoleModal by remember { mutableStateOf(false) }
 
     Box(
@@ -89,7 +101,6 @@ fun BienvenidaScreen(
             .fillMaxSize()
             .background(McBackground)
     ) {
-        // Top full-bleed cat hero image
         McCatImage(
             resId = R.drawable.img_cat_hero,
             contentDescription = "Gato MiauCare",
@@ -99,7 +110,6 @@ fun BienvenidaScreen(
                 .align(Alignment.TopCenter)
         )
 
-        // Gradient fade into warm background at bottom
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -115,9 +125,8 @@ fun BienvenidaScreen(
                 )
         )
 
-        // Frosted glass bottom card matching step_46_shot_2_voluntario_Bienvenida.png
         Surface(
-            color = McCardWhite.copy(alpha = 0.72f),
+            color = McCardWhite.copy(alpha = 0.78f),
             shape = RoundedCornerShape(32.dp),
             border = BorderStroke(1.dp, McCardWhite),
             shadowElevation = 6.dp,
@@ -125,28 +134,31 @@ fun BienvenidaScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 20.dp)
+                .padding(horizontal = 18.dp, vertical = 18.dp)
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 26.dp)
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 22.dp)
             ) {
+                McServerConnectionChip(context = context)
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
                     text = "Bienvenido a\nMiauCare",
                     style = McTitle28.copy(fontSize = 28.sp, lineHeight = 34.sp)
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "La plataforma integral para el bienestar felino y las rondas de revisión.",
                     style = McBody14Regular.copy(color = McTextPrimary.copy(alpha = 0.8f))
                 )
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 McCoralButton(
                     text = "Iniciar Sesión",
                     darkText = true,
                     onClick = onLoginClick
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 OutlinedButton(
                     onClick = { showRoleModal = true },
@@ -165,15 +177,10 @@ fun BienvenidaScreen(
                         style = McBody14Bold
                     )
                 }
-
-                Spacer(modifier = Modifier.height(14.dp))
-                // Prototype quick jump bar so evaluator can inspect any role immediately
-                McRolePrototypeSwitcher(onRoleSelected = onQuickRoleJump)
             }
         }
     }
 
-    // Modal "¿Eres voluntario o veterinario?" (from Figma `Frame 4` / `step_65_shot_1`)
     if (showRoleModal) {
         Dialog(onDismissRequest = { showRoleModal = false }) {
             Surface(
@@ -239,7 +246,7 @@ fun BienvenidaScreen(
 }
 
 // =========================================================================
-// 3. INICIO DE SESIÓN (`Inicio de sesion`)
+// 3. INICIO DE SESIÓN (`POST /api/auth/login` + Manejo de 401 y 403 Veterinario)
 // =========================================================================
 @Composable
 fun LoginScreen(
@@ -248,8 +255,12 @@ fun LoginScreen(
     onForgotPasswordClick: () -> Unit,
     onRegisterClick: () -> Unit
 ) {
-    var email by remember { mutableStateOf("helloworld@gmail.com") }
-    var password by remember { mutableStateOf("1234567890") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf("adminmiaucare@administrador.com") }
+    var password by remember { mutableStateOf("Admin1234") }
+    var backendError by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -261,7 +272,7 @@ fun LoginScreen(
             contentDescription = "Gato MiauCare",
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.62f)
+                .fillMaxHeight(0.55f)
                 .align(Alignment.TopCenter)
         )
 
@@ -273,9 +284,8 @@ fun LoginScreen(
             McBackCircleButton(onClick = onBack, isTranslucentOnPhoto = true)
         }
 
-        // Frosted glass bottom sheet
         Surface(
-            color = McBackground.copy(alpha = 0.88f),
+            color = McBackground.copy(alpha = 0.92f),
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
             border = BorderStroke(1.dp, McCardWhite),
             modifier = Modifier
@@ -284,28 +294,88 @@ fun LoginScreen(
         ) {
             Column(
                 modifier = Modifier
+                    .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 26.dp)
+                    .padding(horizontal = 24.dp, vertical = 22.dp)
             ) {
-                Text(
-                    text = "Inicia Sesión",
-                    style = McTitle28
-                )
-                Spacer(modifier = Modifier.height(18.dp))
+                McServerConnectionChip(context = context)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(text = "Inicia Sesión", style = McTitle28)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Quick credentials fill for Admin precargado
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        color = McSoftNeutral,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier.clickable {
+                            email = "adminmiaucare@administrador.com"
+                            password = "Admin1234"
+                            backendError = null
+                        }
+                    ) {
+                        Text(
+                            text = "Admin precargado",
+                            style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Display 403 Forbidden (solicitud pendiente/rechazada/inactiva) or 401 Unauthorized message
+                if (backendError != null) {
+                    Surface(
+                        color = McCoralSoft,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, McCoralBorder),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = McCoralDark,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = backendError!!,
+                                style = McLabel12Bold.copy(color = McCoralDark)
+                            )
+                        }
+                    }
+                }
 
                 McInputField(
                     label = "Correo Electronico",
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        backendError = null
+                    },
                     isGlassStyle = true,
-                    showCheckEndIcon = true
+                    showCheckEndIcon = email.contains("@")
                 )
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 McInputField(
                     label = "Contraseña",
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        backendError = null
+                    },
                     isPassword = true,
                     isGlassStyle = true
                 )
@@ -321,23 +391,26 @@ fun LoginScreen(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Role selector for login
-                Text(
-                    text = "Entrar con rol:",
-                    style = McLabel11Regular,
-                    modifier = Modifier.padding(bottom = 6.dp)
-                )
-                McRolePrototypeSwitcher(onRoleSelected = {})
-
-                Spacer(modifier = Modifier.height(18.dp))
-
                 McCoralButton(
-                    text = "Iniciar Sesión",
+                    text = if (isSubmitting) "Autenticando..." else "Iniciar Sesión",
                     darkText = true,
-                    onClick = { onLoginSuccess(MiauCareRepository.currentRole) }
+                    onClick = {
+                        if (!isSubmitting) {
+                            isSubmitting = true
+                            backendError = null
+                            scope.launch {
+                                val res = MiauCareRepository.login(context, email, password)
+                                isSubmitting = false
+                                when (res) {
+                                    is ApiResult.Success -> onLoginSuccess(res.data)
+                                    is ApiResult.Error -> backendError = res.message
+                                }
+                            }
+                        }
+                    }
                 )
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
                     text = buildAnnotatedString {
@@ -364,7 +437,7 @@ fun LoginScreen(
 }
 
 // =========================================================================
-// 4. REGISTRO DE CUENTA VOLUNTARIO (`Registro de cuenta`)
+// 4. REGISTRO DE CUENTA VOLUNTARIO (`POST /api/voluntarios/registro` + GPS RN-07)
 // =========================================================================
 @Composable
 fun RegisterVoluntarioScreen(
@@ -372,12 +445,30 @@ fun RegisterVoluntarioScreen(
     onRegistered: () -> Unit,
     onLoginClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     var fullName by remember { mutableStateOf("") }
     var cedula by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
+    var telefono by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var termsAccepted by remember { mutableStateOf(true) }
+    var isSubmitting by remember { mutableStateOf(false) }
+
+    val initialCoords = remember { MiauCareApiClient.obtainDeviceCoordinates(context) }
+    var latitudBase by remember { mutableDoubleStateOf(initialCoords.first) }
+    var longitudBase by remember { mutableDoubleStateOf(initialCoords.second) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        val coords = MiauCareApiClient.obtainDeviceCoordinates(context)
+        latitudBase = coords.first
+        longitudBase = coords.second
+        MiauCareRepository.showToast("Coordenadas GPS obtenidas: $latitudBase, $longitudBase")
+    }
 
     Box(
         modifier = Modifier
@@ -389,7 +480,7 @@ fun RegisterVoluntarioScreen(
             contentDescription = "Gato MiauCare",
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.45f)
+                .fillMaxHeight(0.42f)
                 .align(Alignment.TopCenter)
         )
 
@@ -402,22 +493,74 @@ fun RegisterVoluntarioScreen(
         }
 
         Surface(
-            color = McBackground.copy(alpha = 0.90f),
+            color = McBackground.copy(alpha = 0.92f),
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
             border = BorderStroke(1.dp, McCardWhite),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .fillMaxHeight(0.84f)
+                .fillMaxHeight(0.86f)
         ) {
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 22.dp)
+                    .padding(horizontal = 24.dp, vertical = 20.dp)
             ) {
                 Text(text = "Crear Cuenta", style = McTitle28)
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // GPS Coordinates Card (RN-07)
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(text = "Ubicación GPS Base (RN-07)", style = McLabel12Bold)
+                            Text(
+                                text = "Lat: ${String.format(java.util.Locale.US, "%.4f", latitudBase)} · Lon: ${String.format(java.util.Locale.US, "%.4f", longitudBase)}",
+                                style = McLabel11Regular
+                            )
+                        }
+                        Surface(
+                            color = McCoralSoft,
+                            shape = RoundedCornerShape(999.dp),
+                            modifier = Modifier.clickable {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MyLocation,
+                                    contentDescription = null,
+                                    tint = McCoralDark,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Usar mi GPS",
+                                    style = McLabel11Regular.copy(color = McCoralDark, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 McInputField(
                     label = "Nombre completo",
@@ -447,10 +590,19 @@ fun RegisterVoluntarioScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 McInputField(
+                    label = "Teléfono",
+                    value = telefono,
+                    onValueChange = { telefono = it },
+                    placeholder = "Ej. 3001234567",
+                    isGlassStyle = true
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                McInputField(
                     label = "Contraseña",
                     value = password,
                     onValueChange = { password = it },
-                    placeholder = "Debe contener 8 caracteres",
+                    placeholder = "Debe contener mínimo 6 caracteres",
                     isPassword = true,
                     isGlassStyle = true
                 )
@@ -464,7 +616,7 @@ fun RegisterVoluntarioScreen(
                     isPassword = true,
                     isGlassStyle = true
                 )
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -473,7 +625,7 @@ fun RegisterVoluntarioScreen(
                     Box(
                         modifier = Modifier
                             .size(20.dp)
-                            .clip( CircleShape)
+                            .clip(CircleShape)
                             .background(if (termsAccepted) McBlack else McCardWhite)
                             .border(1.dp, McBlack, CircleShape),
                         contentAlignment = Alignment.Center
@@ -494,15 +646,38 @@ fun RegisterVoluntarioScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 McCoralButton(
-                    text = "Crear cuenta",
+                    text = if (isSubmitting) "Registrando..." else "Crear cuenta",
                     darkText = true,
                     onClick = {
-                        MiauCareRepository.currentRole = MiauRole.VOLUNTARIO
-                        MiauCareRepository.showToast("Cuenta creada exitosamente")
-                        onRegistered()
+                        if (fullName.isBlank() || email.isBlank() || password.isBlank()) {
+                            MiauCareRepository.showToast("Completa nombre, correo y contraseña", isError = true)
+                            return@McCoralButton
+                        }
+                        if (!isSubmitting) {
+                            isSubmitting = true
+                            scope.launch {
+                                val regRes = MiauCareRepository.registrarVoluntario(
+                                    nombreCompleto = fullName,
+                                    numeroCedula = cedula,
+                                    correo = email,
+                                    contrasena = password,
+                                    telefono = telefono,
+                                    disponibilidad = "Mañanas",
+                                    latitudBase = latitudBase,
+                                    longitudBase = longitudBase
+                                )
+                                if (regRes is ApiResult.Success) {
+                                    MiauCareRepository.login(context, email, password)
+                                    isSubmitting = false
+                                    onRegistered()
+                                } else {
+                                    isSubmitting = false
+                                }
+                            }
+                        }
                     }
                 )
 
@@ -527,15 +702,18 @@ fun RegisterVoluntarioScreen(
 }
 
 // =========================================================================
-// 5. OLVIDÓ LA CONTRASEÑA (`Olvido la contaseña`)
+// 5. OLVIDÓ LA CONTRASEÑA (`POST /api/auth/restablecer-contrasena`)
 // =========================================================================
 @Composable
 fun ForgotPasswordScreen(
     onBack: () -> Unit,
     onResetComplete: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var correo by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -546,7 +724,7 @@ fun ForgotPasswordScreen(
             .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         McBackCircleButton(onClick = onBack)
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(text = "Olvido la contraseña?", style = McTitle28)
         Spacer(modifier = Modifier.height(8.dp))
@@ -554,16 +732,24 @@ fun ForgotPasswordScreen(
             text = "No te preocupes! Puedes volver a crear una aqui",
             style = McBody14Regular
         )
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        McInputField(
+            label = "Correo electrónico registrado",
+            value = correo,
+            onValueChange = { correo = it },
+            placeholder = "ejemplo@correo.com"
+        )
+        Spacer(modifier = Modifier.height(14.dp))
 
         McInputField(
             label = "Nueva contraseña",
             value = newPassword,
             onValueChange = { newPassword = it },
-            placeholder = "Debe contener 8 caracteres",
+            placeholder = "Debe contener al menos 6 caracteres",
             isPassword = true
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         McInputField(
             label = "Confirma la contraseña",
@@ -572,14 +758,22 @@ fun ForgotPasswordScreen(
             placeholder = "Repite la contraseña",
             isPassword = true
         )
-        Spacer(modifier = Modifier.height(26.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         McCoralButton(
-            text = "Restablecer contraseña",
+            text = if (isSubmitting) "Actualizando..." else "Restablecer contraseña",
             darkText = true,
             onClick = {
-                MiauCareRepository.showToast("Contraseña actualizada")
-                onResetComplete()
+                if (!isSubmitting) {
+                    isSubmitting = true
+                    scope.launch {
+                        val res = MiauCareRepository.restablecerContrasena(correo, newPassword)
+                        isSubmitting = false
+                        if (res is ApiResult.Success) {
+                            onResetComplete()
+                        }
+                    }
+                }
             }
         )
 
@@ -609,7 +803,7 @@ fun ForgotPasswordScreen(
 }
 
 // =========================================================================
-// 6. VOLUNTARIO · INICIO (`Inicio` + `Estado vacío · Sin gatos`)
+// 6. VOLUNTARIO · INICIO (`GET /api/zonas/ruta`, `PATCH /api/voluntarios/{id}/ubicar-gps`, `GET /api/gatos`)
 // =========================================================================
 @Composable
 fun VoluntarioHomeScreen(
@@ -620,13 +814,38 @@ fun VoluntarioHomeScreen(
     onOpenCatDetail: (String) -> Unit,
     onRoleSwitch: (MiauRole) -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var selectedFilter by remember { mutableStateOf("Todos") }
-    val zoneCats = MiauCareRepository.cats.take(2) // Benito & Luna as in Figma `Inicio`
 
+    val gpsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        val (lat, lon) = MiauCareApiClient.obtainDeviceCoordinates(context)
+        scope.launch {
+            MiauCareRepository.actualizarUbicacionGpsVoluntario(lat, lon)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val (lat, lon) = MiauCareApiClient.obtainDeviceCoordinates(context)
+        MiauCareRepository.fetchVoluntarioPerfil()
+        MiauCareRepository.fetchRutaVoluntario(lat, lon)
+        MiauCareRepository.fetchGatos(zonaId = MiauCareRepository.volunteerAssignedZoneId)
+        if (MiauCareRepository.cats.isEmpty()) {
+            MiauCareRepository.fetchGatos()
+        }
+    }
+
+    val allCats = MiauCareRepository.cats
     val filteredCats = when (selectedFilter) {
-        "No vistos hoy" -> zoneCats.filter { it.statusTag.contains("No vista", ignoreCase = true) }
+        "Mi Zona" -> {
+            val zId = MiauCareRepository.volunteerAssignedZoneId
+            if (zId != null) allCats.filter { it.zoneId == zId } else allCats
+        }
+        "Hospitalizados" -> allCats.filter { it.estadoInternacion.equals("HOSPITALIZADO", true) }
         "Sin gatos" -> emptyList()
-        else -> zoneCats
+        else -> allCats
     }
 
     Column(
@@ -638,19 +857,21 @@ fun VoluntarioHomeScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 12.dp, bottom = 110.dp)
     ) {
-        // Role switcher bar for easy prototype testing across all 3 Figma pages
-        McRolePrototypeSwitcher(onRoleSelected = onRoleSwitch)
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Header Row: "Hola, Voluntario!" / "Pepe Perez" + Clock & Bell buttons
+        // Header Row: Volunteer Name + History & Notifications
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(text = "Hola, Voluntario!", style = McLabel12Bold.copy(color = McTextSecondary))
-                Text(text = "Pepe Perez", style = McTitle24)
+                Text(
+                    text = "Hola, Voluntario! · ${MiauCareRepository.volunteerAssignedZoneName}",
+                    style = McLabel12Bold.copy(color = McTextSecondary)
+                )
+                Text(
+                    text = MiauCareRepository.sessionUserName.ifBlank { "Voluntario MiauCare" },
+                    style = McTitle24
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Surface(
@@ -690,15 +911,27 @@ fun VoluntarioHomeScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Interactive Colony Street Map Card (`3 colonias cerca`, 3 paw pins, `+` FAB)
+        // Interactive Colony Street Map Card consuming GET /api/zonas/ruta + PATCH /ubicar-gps
         McColonyMapCard(
             onAddClick = onReportUnregisteredCat,
-            onColonyPinClick = { MiauCareRepository.showToast("Colonia Norte · 4 gatos registrados") }
+            onColonyPinClick = {
+                val firstCol = MiauCareRepository.routeColonies.firstOrNull()
+                if (firstCol != null) {
+                    MiauCareRepository.showToast("${firstCol.name} · ${firstCol.catsCountText}")
+                }
+            },
+            onUseGpsClick = {
+                gpsPermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
+            }
         )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Section Header: "Gatos en esta zona" | "2 gatos"
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -710,14 +943,13 @@ fun VoluntarioHomeScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Filter pills (`Todos`, `Frecuentes`, `No vistos hoy`, `Sin gatos`)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf("Todos", "Frecuentes", "No vistos hoy", "Sin gatos").forEach { filter ->
+            listOf("Todos", "Mi Zona", "Hospitalizados", "Sin gatos").forEach { filter ->
                 McFilterPill(
                     label = filter,
                     selected = selectedFilter == filter,
@@ -730,7 +962,6 @@ fun VoluntarioHomeScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (filteredCats.isEmpty()) {
-            // Exact match to `Estado vacío · Sin gatos` (`step_65_shot_1_voluntario_Extra_States.png`)
             Surface(
                 color = McCardWhite,
                 shape = RoundedCornerShape(24.dp),
@@ -778,21 +1009,24 @@ fun VoluntarioHomeScreen(
                 }
             }
         } else {
-            // 2-Column Cat Cards (`Benito` & `Luna`) matching `step_57_shot_3_voluntario_Inicio.png`
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                filteredCats.forEach { cat ->
-                    VoluntarioZoneCatCard(
-                        cat = cat,
-                        modifier = Modifier.weight(1f),
-                        onCardClick = { onOpenCatDetail(cat.id) },
-                        onReportSightingClick = { onOpenRoundForm(cat.id) }
-                    )
-                }
-                if (filteredCats.size == 1) {
-                    Spacer(modifier = Modifier.weight(1f))
+            filteredCats.chunked(2).forEach { rowCats ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    rowCats.forEach { cat ->
+                        VoluntarioZoneCatCard(
+                            cat = cat,
+                            modifier = Modifier.weight(1f),
+                            onCardClick = { onOpenCatDetail(cat.id) },
+                            onReportSightingClick = { onOpenRoundForm(cat.id) }
+                        )
+                    }
+                    if (rowCats.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -817,29 +1051,30 @@ private fun VoluntarioZoneCatCard(
         ) {
             McCatImage(
                 resId = cat.imageRes,
+                imageUrl = cat.fotoUrl,
                 contentDescription = cat.name,
                 modifier = Modifier
                     .size(86.dp)
                     .clip(CircleShape)
             )
             Spacer(modifier = Modifier.height(10.dp))
-            Text(text = cat.name, style = McTitle16)
+            Text(text = cat.name, style = McTitle16, maxLines = 1)
             Text(
                 text = "${cat.sex} · ${cat.age}",
-                style = McLabel11Regular
+                style = McLabel11Regular,
+                maxLines = 1
             )
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Status pill (`En calle` / `No vista hoy`)
-            val isUnseen = cat.statusTag.contains("No vista", ignoreCase = true)
+            val isCritical = cat.isFallecido || cat.statusTag.contains("Hospitalizado", ignoreCase = true)
             Surface(
-                color = if (isUnseen) McCoralSoft else McSoftNeutral,
+                color = if (isCritical) McCoralSoft else McSoftNeutral,
                 shape = RoundedCornerShape(999.dp)
             ) {
                 Text(
                     text = cat.statusTag,
                     style = McLabel11Regular.copy(
-                        color = if (isUnseen) McCoralDark else McTextPrimary,
+                        color = if (isCritical) McCoralDark else McTextPrimary,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 10.5.sp
                     ),
@@ -849,7 +1084,6 @@ private fun VoluntarioZoneCatCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // "Reportar avistamiento" button
             Surface(
                 color = McSoftNeutral,
                 shape = RoundedCornerShape(999.dp),
@@ -877,7 +1111,7 @@ private fun VoluntarioZoneCatCard(
 }
 
 // =========================================================================
-// 7. FORMULARIO DE RONDA (`Formulario de ronda` / `Reporte de Avistamiento`)
+// 7. FORMULARIO DE RONDA (`POST /api/avistamientos/normal` & `POST /api/solicitudes-gato`)
 // =========================================================================
 @Composable
 fun RoundFormScreen(
@@ -885,16 +1119,19 @@ fun RoundFormScreen(
     onBack: () -> Unit,
     onSaved: () -> Unit
 ) {
-    val cat = remember(catId) {
-        if (catId == "cat-samantha" || catId.isBlank()) {
-            MiauCareRepository.getCatById("cat-samantha")
-        } else {
-            MiauCareRepository.getCatById(catId)
-        }
-    }
+    val scope = rememberCoroutineScope()
+    var cat by remember { mutableStateOf(MiauCareRepository.getCatById(catId)) }
     var healthStatus by remember { mutableStateOf("Sano") }
     var ateInRound by remember { mutableStateOf("Sí") }
     var notes by remember { mutableStateOf("") }
+    var isSaving by remember { mutableStateOf(false) }
+
+    LaunchedEffect(catId) {
+        val loaded = MiauCareRepository.fetchGatoDetalleYHistorial(catId)
+        if (loaded != null) cat = loaded
+    }
+
+    val currentCat = cat
 
     Column(
         modifier = Modifier
@@ -905,7 +1142,6 @@ fun RoundFormScreen(
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 14.dp)
     ) {
-        // Header
         Row(verticalAlignment = Alignment.CenterVertically) {
             McBackCircleButton(onClick = onBack)
             Spacer(modifier = Modifier.width(12.dp))
@@ -920,35 +1156,36 @@ fun RoundFormScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Cat summary row (`Samantha` / `Ficha del censo` / `En Calle`)
-        Surface(
-            color = McCardWhite,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
+        if (currentCat != null) {
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                McCatImage(
-                    resId = cat.imageRes,
-                    contentDescription = cat.name,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = cat.name, style = McTitle16)
-                    Text(text = "Ficha del censo", style = McLabel11Regular)
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    McCatImage(
+                        resId = currentCat.imageRes,
+                        imageUrl = currentCat.fotoUrl,
+                        contentDescription = currentCat.name,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = "${currentCat.name} · ${currentCat.code}", style = McTitle16)
+                        Text(text = currentCat.colony, style = McLabel11Regular)
+                    }
+                    McStatusBadge(label = currentCat.statusTag)
                 }
-                McStatusBadge(label = "En Calle")
             }
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Question 1: "1. ¿Cómo se ve el gato hoy?"
         Text(text = "1. ¿Cómo se ve el gato hoy?", style = McBody14Bold)
         Spacer(modifier = Modifier.height(10.dp))
         Row(
@@ -979,7 +1216,6 @@ fun RoundFormScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Question 2: "2. ¿El gato comió en esta ronda?"
         Text(text = "2. ¿El gato comió en esta ronda?", style = McBody14Bold)
         Spacer(modifier = Modifier.height(10.dp))
         Row(
@@ -1010,7 +1246,6 @@ fun RoundFormScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Question 3: "3. Observaciones rápidas (Opcional)"
         McInputField(
             label = "3. Observaciones rápidas (Opcional)",
             value = notes,
@@ -1022,7 +1257,7 @@ fun RoundFormScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Critical Attention Box (`Atención Crítica`) matching `step_58_shot_4_voluntario_Formulario.png`
+        // Critical Attention Box (`POST /api/solicitudes-gato`)
         Surface(
             color = McCoralSoft,
             shape = RoundedCornerShape(20.dp),
@@ -1057,7 +1292,10 @@ fun RoundFormScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            MiauCareRepository.showToast("Solicitud de hospitalización enviada")
+                            val targetId = currentCat?.numericId ?: MiauCareRepository.cats.firstOrNull()?.numericId ?: 1L
+                            scope.launch {
+                                MiauCareRepository.crearSolicitudGato(targetId, "INGRESO_HOSPITALIZACION")
+                            }
                         }
                 ) {
                     Row(
@@ -1088,7 +1326,10 @@ fun RoundFormScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            MiauCareRepository.showToast("Reporte de fallecimiento enviado a Admin")
+                            val targetId = currentCat?.numericId ?: MiauCareRepository.cats.firstOrNull()?.numericId ?: 1L
+                            scope.launch {
+                                MiauCareRepository.crearSolicitudGato(targetId, "FALLECIMIENTO")
+                            }
                         }
                 ) {
                     Row(
@@ -1115,36 +1356,42 @@ fun RoundFormScreen(
         Spacer(modifier = Modifier.height(22.dp))
 
         McCoralButton(
-            text = "Guardar Avistamiento",
+            text = if (isSaving) "Guardando..." else "Guardar Avistamiento",
             onClick = {
-                MiauCareRepository.sightingHistory.add(
-                    0,
-                    SightingRecord(
-                        id = "sig-${System.currentTimeMillis()}",
-                        catName = cat.name,
-                        dateGroup = "Hoy · 13 nov 2026",
-                        dateTime = "13 nov 2026 · Ahora",
-                        healthStatus = healthStatus,
-                        ateFood = ateInRound == "Sí",
-                        reportedBy = "Reportado por Pepe Pérez",
-                        imageRes = cat.imageRes
-                    )
-                )
-                MiauCareRepository.showToast("Avistamiento guardado")
-                onSaved()
+                val targetId = currentCat?.numericId ?: MiauCareRepository.cats.firstOrNull()?.numericId
+                if (targetId == null) {
+                    MiauCareRepository.showToast("No hay gato seleccionado", isError = true)
+                    return@McCoralButton
+                }
+                if (!isSaving) {
+                    isSaving = true
+                    scope.launch {
+                        val res = MiauCareRepository.registrarAvistamientoNormal(
+                            gatoNumericId = targetId,
+                            estadoAparenteUi = healthStatus,
+                            comio = ateInRound == "Sí",
+                            observaciones = notes
+                        )
+                        isSaving = false
+                        if (res is ApiResult.Success) {
+                            onSaved()
+                        }
+                    }
+                }
             }
         )
     }
 }
 
 // =========================================================================
-// 8. CALENDARIO DE RONDAS (`Calendario`)
+// 8. CALENDARIO DE RONDAS (`GET /api/rondas` & `PATCH /api/rondas/{id}/asistir`)
 // =========================================================================
 @Composable
 fun VoluntarioCalendarScreen(
     onOpenNotifications: () -> Unit
 ) {
-    var selectedDay by remember { mutableIntStateOf(11) }
+    val scope = rememberCoroutineScope()
+    var selectedDay by remember { mutableIntStateOf(14) }
     val days = listOf(
         "L" to 9,
         "M" to 10,
@@ -1155,6 +1402,10 @@ fun VoluntarioCalendarScreen(
         "D" to 15
     )
 
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchRondas()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1164,7 +1415,6 @@ fun VoluntarioCalendarScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 14.dp, bottom = 110.dp)
     ) {
-        // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1194,7 +1444,6 @@ fun VoluntarioCalendarScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Calendar Card (`Noviembre 2026`, `L 9` .. `D 15`, `X 11` in coral capsule)
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(24.dp),
@@ -1275,12 +1524,35 @@ fun VoluntarioCalendarScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(text = "Próximas Rondas", style = McTitle18)
-            Text(text = "Hoy · $selectedDay nov.", style = McLabel12Bold.copy(color = McTextSecondary))
+            Text(
+                text = "${MiauCareRepository.rounds.size} programadas",
+                style = McLabel12Bold.copy(color = McTextSecondary)
+            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Round schedule cards with left coral indicator bar
+        if (MiauCareRepository.rounds.isEmpty()) {
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Text(text = "No hay rondas programadas", style = McTitle16)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Cuando un administrador programe una ronda en tu zona aparecerá aquí.",
+                        style = McLabel11Regular,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+
         MiauCareRepository.rounds.forEach { round ->
             Surface(
                 color = McCardWhite,
@@ -1314,16 +1586,16 @@ fun VoluntarioCalendarScreen(
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(text = round.timeRange, style = McBody14Bold)
+                                Text(text = "${round.fecha} · ${round.timeRange}", style = McBody14Bold)
                             }
                             Surface(
-                                color = if (round.roundType == "Veterinaria") McCoralSoft else McSoftNeutral,
+                                color = McCoralSoft,
                                 shape = RoundedCornerShape(999.dp)
                             ) {
                                 Text(
-                                    text = round.roundType,
+                                    text = round.estadoBackend,
                                     style = McLabel11Regular.copy(
-                                        color = if (round.roundType == "Veterinaria") McCoralDark else McTextPrimary,
+                                        color = McCoralDark,
                                         fontWeight = FontWeight.SemiBold
                                     ),
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -1343,7 +1615,7 @@ fun VoluntarioCalendarScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                round.initials.forEachIndexed { idx, init ->
+                                round.initials.take(3).forEachIndexed { idx, init ->
                                     Surface(
                                         color = if (idx % 2 == 0) McSoftNeutral else McCoralSoft,
                                         shape = CircleShape,
@@ -1370,11 +1642,12 @@ fun VoluntarioCalendarScreen(
                                 )
                             }
 
-                            if (!round.isJoined) {
+                            if (!round.isJoined && round.estadoBackend == "PROGRAMADA") {
                                 Button(
                                     onClick = {
-                                        round.isJoined = true
-                                        MiauCareRepository.showToast("Te uniste a la ronda")
+                                        scope.launch {
+                                            MiauCareRepository.asistirARonda(round.numericId)
+                                        }
                                     },
                                     shape = RoundedCornerShape(999.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = McCoral),
@@ -1389,15 +1662,12 @@ fun VoluntarioCalendarScreen(
                             } else {
                                 Surface(
                                     color = McSoftNeutral,
-                                    shape = RoundedCornerShape(999.dp),
-                                    modifier = Modifier.clickable {
-                                        MiauCareRepository.showToast("Detalles de ronda: ${round.zoneTitle}")
-                                    }
+                                    shape = RoundedCornerShape(999.dp)
                                 ) {
                                     Text(
-                                        text = "Ver",
+                                        text = if (round.isJoined) "Inscrito" else round.estadoBackend,
                                         style = McLabel12Bold,
-                                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 7.dp)
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)
                                     )
                                 }
                             }
@@ -1410,7 +1680,7 @@ fun VoluntarioCalendarScreen(
 }
 
 // =========================================================================
-// 9. LISTA DE GATOS / CENSO (`Lista de gatos`)
+// 9. LISTA DE GATOS / CENSO (`GET /api/gatos`)
 // =========================================================================
 @Composable
 fun VoluntarioCensusScreen(
@@ -1421,20 +1691,19 @@ fun VoluntarioCensusScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("Todos") }
 
-    // Order matching Figma `Lista de gatos`: Gary, Peach, Whitney, Buggy + others
-    val censusOrderIds = listOf("cat-gary", "cat-peach", "cat-whitney", "cat-buggy", "cat-samantha", "cat-benito", "cat-luna", "cat-manchas")
-    val orderedCats = censusOrderIds.mapNotNull { id -> MiauCareRepository.cats.find { it.id == id } }
+    LaunchedEffect(searchQuery) {
+        MiauCareRepository.fetchGatos(nombre = searchQuery.takeIf { it.isNotBlank() })
+    }
 
-    val filteredCats = orderedCats.filter { cat ->
-        val matchesQuery = cat.name.contains(searchQuery, ignoreCase = true) ||
-            cat.breed.contains(searchQuery, ignoreCase = true)
+    val filteredCats = MiauCareRepository.cats.filter { cat ->
         val matchesTab = when (selectedFilter) {
-            "Mi Zona" -> cat.colony.contains("Norte", ignoreCase = true)
-            "En Calle" -> cat.statusTag.contains("calle", ignoreCase = true)
-            "Hospitalizado" -> cat.statusTag.contains("Hospitalizado", ignoreCase = true)
+            "Mi Zona" -> MiauCareRepository.volunteerAssignedZoneId == null ||
+                cat.zoneId == MiauCareRepository.volunteerAssignedZoneId
+            "En Calle" -> cat.estadoInternacion.equals("EN_CALLE", ignoreCase = true)
+            "Hospitalizado" -> cat.estadoInternacion.equals("HOSPITALIZADO", ignoreCase = true)
             else -> true
         }
-        matchesQuery && matchesTab
+        matchesTab
     }
 
     Column(
@@ -1446,7 +1715,6 @@ fun VoluntarioCensusScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 14.dp, bottom = 110.dp)
     ) {
-        // Header: "Censo de gatos" / "10 gatos" + History Clock & Coral '+' FAB
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1454,7 +1722,7 @@ fun VoluntarioCensusScreen(
         ) {
             Column {
                 Text(text = "Censo de gatos", style = McTitle24)
-                Text(text = "10 gatos", style = McBody14Regular)
+                Text(text = "${filteredCats.size} gatos", style = McBody14Regular)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Surface(
@@ -1520,7 +1788,6 @@ fun VoluntarioCensusScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 2x2 Grid matching `step_59_shot_5_voluntario_Calendario_y_Lista.png`
         filteredCats.chunked(2).forEach { rowCats ->
             Row(
                 modifier = Modifier
@@ -1563,10 +1830,10 @@ fun CensusGridCatCard(
             ) {
                 McCatImage(
                     resId = cat.imageRes,
+                    imageUrl = cat.fotoUrl,
                     contentDescription = cat.name,
                     modifier = Modifier.fillMaxSize()
                 )
-                // Top-right white circle with red location pin
                 Surface(
                     color = McCardWhite,
                     shape = CircleShape,
@@ -1589,11 +1856,13 @@ fun CensusGridCatCard(
             Text(
                 text = cat.name,
                 style = McTitle16,
+                maxLines = 1,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
             Text(
-                text = cat.breed,
+                text = "${cat.code} · ${cat.breed}",
                 style = McLabel11Regular,
+                maxLines = 1,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
             Spacer(modifier = Modifier.height(10.dp))
@@ -1602,14 +1871,14 @@ fun CensusGridCatCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Surface(
-                    color = McSoftNeutral,
+                    color = if (cat.isFallecido) McCoralSoft else McSoftNeutral,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
                         text = cat.statusTag,
                         style = McLabel11Regular.copy(
-                            color = McTextPrimary,
+                            color = if (cat.isFallecido) McCoralDark else McTextPrimary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium
                         ),
@@ -1639,7 +1908,7 @@ fun CensusGridCatCard(
 }
 
 // =========================================================================
-// 10. INFORMACIÓN DEL GATO (`Información del gato` - Samantha)
+// 10. INFORMACIÓN DEL GATO (`GET /api/gatos/{id}` + `GET /api/historial-clinico/gato/{id}`)
 // =========================================================================
 @Composable
 fun CatDetailScreen(
@@ -1647,27 +1916,30 @@ fun CatDetailScreen(
     onBack: () -> Unit,
     onReportSightingClick: (String) -> Unit
 ) {
-    val cat = remember(catId) {
-        if (catId.isBlank()) MiauCareRepository.getCatById("cat-samantha")
-        else MiauCareRepository.getCatById(catId)
+    var cat by remember { mutableStateOf(MiauCareRepository.getCatById(catId)) }
+
+    LaunchedEffect(catId) {
+        val loaded = MiauCareRepository.fetchGatoDetalleYHistorial(catId)
+        if (loaded != null) cat = loaded
     }
+
+    val currentCat = cat
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(McBackground)
     ) {
-        // Top hero cat image
         McCatImage(
-            resId = cat.imageRes,
-            contentDescription = cat.name,
+            resId = currentCat?.imageRes ?: R.drawable.img_cat_samantha,
+            imageUrl = currentCat?.fotoUrl,
+            contentDescription = currentCat?.name,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(330.dp)
                 .align(Alignment.TopCenter)
         )
 
-        // Back button on photo
         Box(
             modifier = Modifier
                 .statusBarsPadding()
@@ -1676,7 +1948,6 @@ fun CatDetailScreen(
             McBackCircleButton(onClick = onBack)
         }
 
-        // Bottom rounded sheet overlapping photo
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
@@ -1690,7 +1961,6 @@ fun CatDetailScreen(
                     .navigationBarsPadding()
                     .padding(horizontal = 24.dp, vertical = 16.dp)
             ) {
-                // Drag handle
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
@@ -1707,10 +1977,13 @@ fun CatDetailScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text(text = cat.name, style = McTitle24)
-                        Text(text = "${cat.breed} · Ficha del censo", style = McBody14Regular)
+                        Text(text = currentCat?.name ?: "Cargando...", style = McTitle24)
+                        Text(
+                            text = "${currentCat?.breed ?: "Mestizo"} · ${currentCat?.code ?: ""}",
+                            style = McBody14Regular
+                        )
                     }
-                    McStatusBadge(label = cat.statusTag, showRedDot = true)
+                    McStatusBadge(label = currentCat?.statusTag ?: "En calle", showRedDot = true)
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -1724,27 +1997,47 @@ fun CatDetailScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = cat.colony,
+                        text = currentCat?.colony ?: "Colonia MiauCare",
                         style = McLabel12Bold.copy(color = McTextSecondary)
                     )
                 }
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // 4 stat boxes (`Macho`, `3 años`, `Esterilizado`, `4.2 kg`)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    CatStatBox(value = cat.sex, label = "Sexo", modifier = Modifier.weight(1f))
-                    CatStatBox(value = cat.age, label = "Edad aprox.", modifier = Modifier.weight(1f))
-                    CatStatBox(value = cat.sterilizationStatus, label = "Estado", modifier = Modifier.weight(1.2f))
-                    CatStatBox(value = "${cat.weightKg} kg", label = "Peso", modifier = Modifier.weight(0.9f))
+                    CatStatBox(value = currentCat?.sex ?: "-", label = "Sexo", modifier = Modifier.weight(1f))
+                    CatStatBox(value = currentCat?.age ?: "-", label = "Edad aprox.", modifier = Modifier.weight(1f))
+                    CatStatBox(value = currentCat?.sterilizationStatus ?: "-", label = "Estado", modifier = Modifier.weight(1.2f))
+                    CatStatBox(value = "${currentCat?.weightKg ?: "-"} kg", label = "Peso", modifier = Modifier.weight(0.9f))
+                }
+
+                if (!currentCat?.condicionesEspeciales.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Surface(
+                        color = McCoralSoft,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, McCoralBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(imageVector = Icons.Outlined.WarningAmber, contentDescription = null, tint = McCoralDark, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = currentCat?.condicionesEspeciales ?: "",
+                                style = McLabel12Bold.copy(color = McCoralDark)
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(22.dp))
 
-                // "Historia Clínica" + "Solo lectura" badge
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1765,84 +2058,74 @@ fun CatDetailScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Soft red card: FIV+
-                Surface(
-                    color = McCoralSoft,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                        Box(
-                            modifier = Modifier
-                                .width(5.dp)
-                                .fillMaxHeight()
-                                .background(McCoral)
+                if (MiauCareRepository.currentCatHistory.isEmpty()) {
+                    Surface(
+                        color = McBackground,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Sin entradas clínicas registradas para este gato.",
+                            style = McLabel11Regular,
+                            modifier = Modifier.padding(16.dp)
                         )
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.Top
+                    }
+                } else {
+                    MiauCareRepository.currentCatHistory.forEach { entry ->
+                        val isCrit = entry.nivelGravedad.equals("CRITICA", true)
+                        Surface(
+                            color = if (isCrit) McCoralSoft else McBackground,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 10.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.AddBox,
-                                contentDescription = null,
-                                tint = McCoral,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text(
-                                    text = cat.fivWarningTitle ?: "FIV+ (Inmunodeficiencia Felina)",
-                                    style = McBody14Bold
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = cat.fivWarningDesc ?: "Diagnosticado el 12/Oct/2026. Requiere monitoreo de peso.",
-                                    style = McLabel11Regular
-                                )
+                            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                                if (isCrit) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(5.dp)
+                                            .fillMaxHeight()
+                                            .background(McCoral)
+                                    )
+                                }
+                                Column(modifier = Modifier.padding(14.dp)) {
+                                    Text(
+                                        text = entry.diagnosticoNombre.ifBlank { entry.descripcion.ifBlank { entry.tipo } },
+                                        style = McBody14Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "${entry.fecha} · ${entry.notas.ifBlank { entry.descripcion }} (${entry.veterinarioNombre})",
+                                        style = McLabel11Regular
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
-                // Secondary condition card: Ceguera Parcial
-                Surface(
-                    color = McBackground,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.Top
+                if (currentCat?.isFallecido == true) {
+                    Surface(
+                        color = McCoralSoft,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.MedicalServices,
-                            contentDescription = null,
-                            tint = McTextSecondary,
-                            modifier = Modifier.size(20.dp)
+                        Text(
+                            text = "Este gato se encuentra registrado como FALLECIDO.",
+                            style = McLabel12Bold.copy(color = McCoralDark),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(14.dp)
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = cat.secondaryConditionTitle ?: "Ceguera Parcial - Ojo Izquierdo",
-                                style = McBody14Bold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = cat.secondaryConditionDesc ?: "Condición estable. No requiere medicación.",
-                                style = McLabel11Regular
-                            )
-                        }
                     }
+                } else {
+                    McCoralButton(
+                        text = "Reportar avistamiento en ronda",
+                        onClick = { onReportSightingClick(currentCat?.id ?: catId) }
+                    )
                 }
-
-                Spacer(modifier = Modifier.height(22.dp))
-
-                McCoralButton(
-                    text = "Reportar avistamiento en ronda",
-                    onClick = { onReportSightingClick(cat.id) }
-                )
             }
         }
     }
@@ -1881,17 +2164,33 @@ private fun CatStatBox(
 }
 
 // =========================================================================
-// 11. REPORTAR GATO NO CENSADO (`Reportar gato no censado`)
+// 11. REPORTAR GATO NO CENSADO (`POST /api/archivos/subir?carpeta=gatos` -> `POST /api/avistamientos/no-censado`)
 // =========================================================================
 @Composable
 fun ReportUnregisteredCatScreen(
     onBack: () -> Unit,
     onSubmitted: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var apparentState by remember { mutableStateOf("Herido") }
-    var location by remember { mutableStateOf("Parque Norte - C. del Olivo") }
+    var selectedZoneIndex by remember { mutableIntStateOf(0) }
     var observations by remember { mutableStateOf("") }
-    var photoAttached by remember { mutableStateOf(false) }
+    var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var selectedFileName by remember { mutableStateOf<String?>(null) }
+    var isUploading by remember { mutableStateOf(false) }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            selectedImageBytes = MiauCareApiClient.readUriBytes(context, uri)
+            selectedFileName = "gato_rescate_${System.currentTimeMillis()}.jpg"
+        }
+    }
+
+    val zones = MiauCareRepository.colonies
+    val currentZone = zones.getOrNull(selectedZoneIndex)
 
     Column(
         modifier = Modifier
@@ -1907,13 +2206,12 @@ fun ReportUnregisteredCatScreen(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(text = "Reportar gato no censado", style = McTitle18)
-                Text(text = "Registrar nuevo avistamiento", style = McLabel11Regular)
+                Text(text = "Subida a Supabase Storage + Alerta de rescate", style = McLabel11Regular)
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Info alert banner
         Surface(
             color = McSoftNeutral,
             shape = RoundedCornerShape(16.dp),
@@ -1931,7 +2229,7 @@ fun ReportUnregisteredCatScreen(
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Este gato no está en el censo, se generará una alerta de rescate",
+                    text = "Este gato no está en el censo, se subirá su foto a Supabase y se generará un registro no censado.",
                     style = McLabel12Bold
                 )
             }
@@ -1939,7 +2237,7 @@ fun ReportUnregisteredCatScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Photo Upload Box
+        // Photo Upload Box (opens Gallery picker or quick sample fallback)
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(22.dp),
@@ -1947,7 +2245,7 @@ fun ReportUnregisteredCatScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(155.dp)
-                .clickable { photoAttached = !photoAttached }
+                .clickable { imagePickerLauncher.launch("image/*") }
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1955,36 +2253,44 @@ fun ReportUnregisteredCatScreen(
                 modifier = Modifier.padding(16.dp)
             ) {
                 Surface(
-                    color = McSoftNeutral,
+                    color = if (selectedImageBytes != null) StatusSanoBg else McSoftNeutral,
                     shape = CircleShape,
                     modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = if (photoAttached) Icons.Default.Check else Icons.Outlined.PhotoCamera,
+                            imageVector = if (selectedImageBytes != null) Icons.Default.Check else Icons.Outlined.PhotoCamera,
                             contentDescription = null,
-                            tint = McTextPrimary,
+                            tint = if (selectedImageBytes != null) StatusSanoText else McTextPrimary,
                             modifier = Modifier.size(22.dp)
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = if (photoAttached) "Foto adjuntada (gato_rescate.jpg)" else "Añadir foto del gato",
+                    text = selectedFileName ?: "Añadir foto del gato (Galería)",
                     style = McBody14Bold
                 )
-                Spacer(modifier = Modifier.height(2.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Toca para tomar una foto o subir de la galería",
+                    text = "Se subirá con POST /api/archivos/subir (carpeta=gatos)",
                     style = McLabel11Regular
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "O usar foto de muestra del dispositivo",
+                    style = McLabel11Regular.copy(color = McCoralDark, fontWeight = FontWeight.Bold),
+                    modifier = Modifier.clickable {
+                        selectedImageBytes = MiauCareApiClient.drawableToJpegBytes(context, R.drawable.img_cat_samantha)
+                        selectedFileName = "gato_muestra_supabase.jpg"
+                    }
                 )
             }
         }
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Ubicación
-        Text(text = "Ubicación", style = McLabel12Bold)
+        Text(text = "Ubicación / Colonia", style = McLabel12Bold)
         Spacer(modifier = Modifier.height(8.dp))
         Surface(
             color = McCardWhite,
@@ -2003,7 +2309,7 @@ fun ReportUnregisteredCatScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = location,
+                    text = currentZone?.let { "${it.name} - ${it.address}" } ?: "Colonia Norte - C. del Olivo",
                     style = McBody14Regular.copy(color = McTextPrimary),
                     modifier = Modifier.weight(1f)
                 )
@@ -2011,7 +2317,9 @@ fun ReportUnregisteredCatScreen(
                     color = McSoftNeutral,
                     shape = RoundedCornerShape(999.dp),
                     modifier = Modifier.clickable {
-                        location = if (location.contains("Olivo")) "Plaza Mayor - Centro" else "Parque Norte - C. del Olivo"
+                        if (zones.isNotEmpty()) {
+                            selectedZoneIndex = (selectedZoneIndex + 1) % zones.size
+                        }
                     }
                 ) {
                     Text(
@@ -2025,7 +2333,6 @@ fun ReportUnregisteredCatScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // Estado aparente (`Sano`, `Enfermo`, `Herido`)
         Text(text = "Estado aparente", style = McLabel12Bold)
         Spacer(modifier = Modifier.height(8.dp))
         Row(
@@ -2072,30 +2379,32 @@ fun ReportUnregisteredCatScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         McCoralButton(
-            text = "Enviar alerta de rescate",
+            text = if (isUploading) "Subiendo foto y enviando..." else "Enviar alerta de rescate",
             onClick = {
-                MiauCareRepository.sightingHistory.add(
-                    0,
-                    SightingRecord(
-                        id = "sig-${System.currentTimeMillis()}",
-                        catName = "Gato no censado",
-                        dateGroup = "Hoy · 13 nov 2026",
-                        dateTime = "13 nov 2026 · Ahora",
-                        healthStatus = apparentState,
-                        ateFood = false,
-                        reportedBy = "Reportado por Pepe Pérez",
-                        imageRes = R.drawable.img_cat_samantha
-                    )
-                )
-                MiauCareRepository.showToast("Alerta de rescate enviada")
-                onSubmitted()
+                if (!isUploading) {
+                    isUploading = true
+                    val bytesToUpload = selectedImageBytes
+                        ?: MiauCareApiClient.drawableToJpegBytes(context, R.drawable.img_cat_samantha)
+                    scope.launch {
+                        val res = MiauCareRepository.registrarAvistamientoNoCensado(
+                            zonaId = currentZone?.numericId,
+                            estadoAparenteUi = apparentState,
+                            observaciones = observations,
+                            imageBytes = bytesToUpload
+                        )
+                        isUploading = false
+                        if (res is ApiResult.Success) {
+                            onSubmitted()
+                        }
+                    }
+                }
             }
         )
     }
 }
 
 // =========================================================================
-// 12. HISTORIAL DE AVISTAMIENTOS (`Historial de avistamientos`)
+// 12. HISTORIAL DE AVISTAMIENTOS (`GET /api/avistamientos/zona/{zonaId}`)
 // =========================================================================
 @Composable
 fun SightingHistoryScreen(
@@ -2104,8 +2413,13 @@ fun SightingHistoryScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedStatus by remember { mutableStateOf("Todos los gatos") }
 
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchAvistamientosPorGatoOZona(zonaId = MiauCareRepository.volunteerAssignedZoneId)
+    }
+
     val filtered = MiauCareRepository.sightingHistory.filter { item ->
-        val matchesQuery = item.catName.contains(searchQuery, ignoreCase = true)
+        val matchesQuery = item.catName.contains(searchQuery, ignoreCase = true) ||
+            item.observaciones.contains(searchQuery, ignoreCase = true)
         val matchesStatus = selectedStatus == "Todos los gatos" || item.healthStatus == selectedStatus
         matchesQuery && matchesStatus
     }
@@ -2126,7 +2440,7 @@ fun SightingHistoryScreen(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(text = "Historial de avistamientos", style = McTitle18)
-                Text(text = "Rondas registradas en tu zona", style = McLabel11Regular)
+                Text(text = "Rondas registradas en el backend", style = McLabel11Regular)
             }
         }
 
@@ -2140,7 +2454,6 @@ fun SightingHistoryScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Filter row matching `step_60_shot_6_voluntario_Detalle_y_Reportes.png`
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2158,6 +2471,21 @@ fun SightingHistoryScreen(
         }
 
         Spacer(modifier = Modifier.height(18.dp))
+
+        if (grouped.isEmpty()) {
+            Surface(
+                color = McCardWhite,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Aún no hay avistamientos registrados en esta zona.",
+                    style = McBody14Regular,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(24.dp)
+                )
+            }
+        }
 
         grouped.forEach { (groupTitle, items) ->
             Text(
@@ -2179,6 +2507,7 @@ fun SightingHistoryScreen(
                     ) {
                         McCatImage(
                             resId = item.imageRes,
+                            imageUrl = item.fotoUrl,
                             contentDescription = item.catName,
                             modifier = Modifier
                                 .size(56.dp)
@@ -2207,7 +2536,11 @@ fun SightingHistoryScreen(
                                     }
                                 }
                             }
-                            Spacer(modifier = Modifier.height(6.dp))
+                            if (item.observaciones.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(text = item.observaciones, style = McLabel11Regular)
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(text = item.reportedBy, style = McLabel11Regular)
                         }
                     }
@@ -2219,12 +2552,16 @@ fun SightingHistoryScreen(
 }
 
 // =========================================================================
-// 13. NOTIFICACIONES (`Notificaciones`)
+// 13. NOTIFICACIONES (`GET /api/notificaciones/mias`)
 // =========================================================================
 @Composable
 fun VoluntarioNotificationsScreen(
     onBack: () -> Unit
 ) {
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchMisNotificaciones()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2265,67 +2602,65 @@ fun VoluntarioNotificationsScreen(
 
         Spacer(modifier = Modifier.height(22.dp))
 
-        Text(text = "TODAY", style = McLabel12Bold)
-        Spacer(modifier = Modifier.height(10.dp))
-        repeat(3) {
-            NotificationItemCard()
-            Spacer(modifier = Modifier.height(10.dp))
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(text = "YESTERDAY", style = McLabel12Bold)
-        Spacer(modifier = Modifier.height(10.dp))
-        repeat(2) {
-            NotificationItemCard()
-            Spacer(modifier = Modifier.height(10.dp))
-        }
-    }
-}
-
-@Composable
-private fun NotificationItemCard() {
-    Surface(
-        color = McCardWhite,
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        if (MiauCareRepository.notifications.isEmpty()) {
             Surface(
-                color = McSoftNeutral,
-                shape = CircleShape,
-                modifier = Modifier.size(44.dp)
+                color = McCardWhite,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Pets,
-                        contentDescription = null,
-                        tint = McTextPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                Text(
+                    text = "No tienes notificaciones pendientes en este momento.",
+                    style = McBody14Regular,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(24.dp)
+                )
             }
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = "Recordatorio de Ronda", style = McBody14Bold)
-                Text(
-                    text = "Tienes una ronda programada en Zona Norte a las 4:00 PM.",
-                    style = McLabel11Regular
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "15m ago.",
-                    style = McLabel11Regular.copy(fontSize = 10.sp)
-                )
+        } else {
+            MiauCareRepository.notifications.forEach { notif ->
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            color = McSoftNeutral,
+                            shape = CircleShape,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Pets,
+                                    contentDescription = null,
+                                    tint = McTextPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(text = notif.titulo, style = McBody14Bold)
+                            Text(text = notif.mensaje, style = McLabel11Regular)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${notif.fechaCreacion} · Para: ${notif.destinatarios}",
+                                style = McLabel11Regular.copy(fontSize = 10.sp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 // =========================================================================
-// 14. PERFIL VOLUNTARIO (`Perfil`)
+// 14. PERFIL VOLUNTARIO (`GET / PUT /api/voluntarios/{id}` + `PATCH /ubicar-gps`)
 // =========================================================================
 @Composable
 fun VoluntarioProfileScreen(
@@ -2333,8 +2668,28 @@ fun VoluntarioProfileScreen(
     onLogout: () -> Unit,
     onRoleSwitch: (MiauRole) -> Unit
 ) {
-    var fullName by remember { mutableStateOf("Sofía Álvarez") }
-    var email by remember { mutableStateOf("sofia.alvarez@miaucare.org") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var fullName by remember { mutableStateOf(MiauCareRepository.sessionUserName) }
+    var email by remember { mutableStateOf(MiauCareRepository.sessionUserEmail) }
+    var phone by remember { mutableStateOf(MiauCareRepository.volunteerPhone) }
+
+    val gpsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        val (lat, lon) = MiauCareApiClient.obtainDeviceCoordinates(context)
+        scope.launch {
+            MiauCareRepository.actualizarUbicacionGpsVoluntario(lat, lon)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        MiauCareRepository.fetchVoluntarioPerfil()
+        fullName = MiauCareRepository.sessionUserName
+        email = MiauCareRepository.sessionUserEmail
+        phone = MiauCareRepository.volunteerPhone
+    }
 
     Column(
         modifier = Modifier
@@ -2345,7 +2700,6 @@ fun VoluntarioProfileScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 14.dp, bottom = 110.dp)
     ) {
-        // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2353,7 +2707,7 @@ fun VoluntarioProfileScreen(
         ) {
             Column {
                 Text(text = "Mi Perfil", style = McTitle24)
-                Text(text = "Gestiona tu información personal", style = McBody14Regular)
+                Text(text = "GET /api/voluntarios/${MiauCareRepository.sessionUserId}", style = McBody14Regular)
             }
             Surface(
                 color = McCardWhite,
@@ -2375,7 +2729,6 @@ fun VoluntarioProfileScreen(
 
         Spacer(modifier = Modifier.height(22.dp))
 
-        // Avatar + Name + "Voluntaria de Campo" coral pill
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.fillMaxWidth()
@@ -2387,39 +2740,20 @@ fun VoluntarioProfileScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "SA",
-                            style = McTitle24.copy(color = McTextSecondary)
-                        )
-                    }
-                }
-                Surface(
-                    color = McCoral,
-                    shape = CircleShape,
-                    border = BorderStroke(2.dp, McBackground),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(28.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Outlined.PhotoCamera,
-                            contentDescription = null,
-                            tint = McCardWhite,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        val initials = fullName.split(" ").take(2).joinToString("") { it.take(1).uppercase() }.ifBlank { "VO" }
+                        Text(text = initials, style = McTitle24.copy(color = McTextSecondary))
                     }
                 }
             }
             Spacer(modifier = Modifier.height(10.dp))
-            Text(text = fullName, style = McTitle18)
+            Text(text = fullName.ifBlank { "Voluntario" }, style = McTitle18)
             Spacer(modifier = Modifier.height(6.dp))
             Surface(
                 color = McCoral,
                 shape = RoundedCornerShape(999.dp)
             ) {
                 Text(
-                    text = "Voluntaria de Campo",
+                    text = "Voluntario de Campo",
                     style = McLabel11Regular.copy(
                         color = McTextPrimary,
                         fontWeight = FontWeight.Bold
@@ -2429,59 +2763,78 @@ fun VoluntarioProfileScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        // Active Zone Card
+        // Active Zone Card + "Usar mi ubicación GPS" (RN-07)
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    color = McSoftNeutral,
-                    shape = CircleShape,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = McCoral,
-                            modifier = Modifier.size(20.dp)
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = McSoftNeutral,
+                        shape = CircleShape,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = McCoral,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Zona Activa: ${MiauCareRepository.volunteerAssignedZoneName}",
+                            style = McBody14Bold
+                        )
+                        Text(
+                            text = "Asignación automática por cercanía GPS (RN-07)",
+                            style = McLabel11Regular
                         )
                     }
                 }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = "Zona Activa: Norte - Parque Central", style = McBody14Bold)
-                    Text(text = "3 colonias asignadas para rondas", style = McLabel11Regular)
-                }
-                Icon(
-                    imageVector = Icons.Outlined.Edit,
-                    contentDescription = "Editar",
-                    tint = McTextSecondary,
-                    modifier = Modifier.size(18.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+                McSoftButton(
+                    text = "Usar mi ubicación GPS",
+                    leadingIcon = Icons.Default.MyLocation,
+                    onClick = {
+                        gpsLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         McInputField(
             label = "Nombre completo",
             value = fullName,
             onValueChange = { fullName = it }
         )
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         McInputField(
             label = "Correo electrónico",
             value = email,
             onValueChange = { email = it }
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        McInputField(
+            label = "Teléfono",
+            value = phone,
+            onValueChange = { phone = it }
         )
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -2489,13 +2842,20 @@ fun VoluntarioProfileScreen(
         McCoralButton(
             text = "Guardar cambios",
             darkText = true,
-            onClick = { MiauCareRepository.showToast("Cambios guardados") }
+            onClick = {
+                scope.launch {
+                    MiauCareRepository.actualizarPerfilVoluntario(fullName, email, phone)
+                }
+            }
         )
 
         Spacer(modifier = Modifier.height(10.dp))
 
         Button(
-            onClick = onLogout,
+            onClick = {
+                MiauCareRepository.logout(context)
+                onLogout()
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
@@ -2514,10 +2874,5 @@ fun VoluntarioProfileScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Text(text = "Cerrar Sesión", style = McBody14Bold.copy(color = McCoralDark))
         }
-
-        Spacer(modifier = Modifier.height(18.dp))
-        Text(text = "Cambiar vista de rol (Prototipo):", style = McLabel11Regular)
-        Spacer(modifier = Modifier.height(6.dp))
-        McRolePrototypeSwitcher(onRoleSelected = onRoleSwitch)
     }
 }

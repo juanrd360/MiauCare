@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
+import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.navigation.MiauCareApp
 import com.example.miaucare.ui.screens.AdminHomeScreen
 import com.example.miaucare.ui.screens.BienvenidaScreen
@@ -16,6 +17,7 @@ import com.example.miaucare.ui.theme.MiaucareTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        MiauCareRepository.initSession(applicationContext)
         enableEdgeToEdge()
         setContent {
             MiaucareTheme {
