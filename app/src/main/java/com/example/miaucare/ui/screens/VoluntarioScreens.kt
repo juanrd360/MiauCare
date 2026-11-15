@@ -115,68 +115,45 @@ fun LoginScreen(
     var isSubmitting by remember { mutableStateOf(false) }
     var showRoleModal by remember { mutableStateOf(false) }
 
-    val glassShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    val glassShape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1F1C18))
     ) {
-        // Fotografía completa de gato como en Figma `Inicio de sesion`
+        // Fotografía exacta exportada de Figma (`gato3_1.png`, 360x800) sin zoom excesivo
         McCatImage(
-            resId = R.drawable.img_cat_hero,
+            resId = R.drawable.img_cat_login,
             contentDescription = "Gato MiauCare",
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
 
-        // Sutil degradado inferior para legibilidad sobre el vidrio translúcido
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            Color.Transparent,
-                            Color(0x26000000),
-                            Color(0x55EAE5DD)
-                        )
-                    )
-                )
-        )
-
-        // Botón superior izquierdo `<` estilo Figma
-        Box(
-            modifier = Modifier
-                .statusBarsPadding()
-                .padding(start = 20.dp, top = 16.dp)
-        ) {
-            McBackCircleButton(onClick = onBack, isTranslucentOnPhoto = true)
-        }
-
-        // Tarjeta glass translúcida inferior exacta a Figma (`Inicio de sesion`)
+        // Tarjeta glass translúcida inferior exacta a Figma (`Rectangle 2`: 53% inferior, radio 30dp)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .fillMaxHeight(0.535f)
                 .clip(glassShape)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color(0x4DFFFFFF),
+                            Color(0x52F6F4F1),
                             Color(0x88F6F4F1),
-                            Color(0xCCF6F4F1)
+                            Color(0xC2F6F4F1)
                         )
                     )
                 )
-                .border(1.dp, Color(0xCCFFFFFF), glassShape)
+                .border(1.dp, Color(0xFFF6F4F1), glassShape)
         ) {
             Column(
                 modifier = Modifier
+                    .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 22.dp)
+                    .padding(horizontal = 24.dp, vertical = 20.dp)
             ) {
                 Text(
                     text = "Inicia Sesión",
