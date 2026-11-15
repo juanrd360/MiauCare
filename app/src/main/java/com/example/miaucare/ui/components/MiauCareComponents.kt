@@ -1093,16 +1093,15 @@ fun McServerConnectionChip(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
-                    Text(text = "Servidor Backend MiauCare", style = McTitle18)
+                    Text(text = "Servidor Backend MiauCare (Render)", style = McTitle18)
                     Text(
-                        text = "Usa 10.0.2.2:8080 en emulador local, la IP de tu PC en celular físico, o Render Cloud.",
+                        text = "Conectado directamente a Render Cloud (https://miaucare.onrender.com).",
                         style = McLabel11Regular
                     )
                     Spacer(modifier = Modifier.height(12.dp))
 
                     listOf(
-                        "Emulador Android (Local 8080)" to MiauCareApiClient.DEFAULT_EMULATOR_URL,
-                        "Render Cloud (En línea)" to MiauCareApiClient.RENDER_CLOUD_URL
+                        "Render Cloud (Producción)" to MiauCareApiClient.RENDER_CLOUD_URL
                     ).forEach { (label, url) ->
                         Surface(
                             color = if (currentUrl == url) McCoralSoft else McBackground,

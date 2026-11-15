@@ -368,9 +368,9 @@ object MiauCareRepository {
         val roleStr = prefs.getString("role", "VOLUNTARIO") ?: "VOLUNTARIO"
         currentRole = MiauRole.fromBackend(roleStr)
         debeCambiarContrasena = prefs.getBoolean("debeCambiar", false)
-        val savedBaseUrl = prefs.getString("baseUrl", MiauCareApiClient.DEFAULT_EMULATOR_URL)
-            ?: MiauCareApiClient.DEFAULT_EMULATOR_URL
-        MiauCareApiClient.baseUrl = savedBaseUrl
+        // Siempre usar Render Cloud (https://miaucare.onrender.com) por defecto
+        MiauCareApiClient.baseUrl = MiauCareApiClient.RENDER_CLOUD_URL
+        prefs.edit().putString("baseUrl", MiauCareApiClient.RENDER_CLOUD_URL).apply()
     }
 
     fun saveSession(

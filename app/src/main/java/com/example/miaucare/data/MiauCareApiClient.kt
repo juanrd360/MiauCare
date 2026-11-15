@@ -34,12 +34,11 @@ sealed class ApiResult<out T> {
 }
 
 object MiauCareApiClient {
-    const val DEFAULT_EMULATOR_URL = "http://10.0.2.2:8080"
     const val RENDER_CLOUD_URL = "https://miaucare.onrender.com"
+    const val DEFAULT_EMULATOR_URL = "https://miaucare.onrender.com"
 
-    // Default to http://10.0.2.2:8080 with automatic fallback to https://miaucare.onrender.com
-    // if local port 8080 is not reachable, so both local and Render cloud work seamlessly.
-    var baseUrl: String = DEFAULT_EMULATOR_URL
+    // Conectado directamente al backend en producción de Render (https://miaucare.onrender.com)
+    var baseUrl: String = RENDER_CLOUD_URL
     var autoFallbackToCloud: Boolean = true
 
     private val imageCache = ConcurrentHashMap<String, ImageBitmap>()
@@ -60,9 +59,9 @@ object MiauCareApiClient {
 
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(authInterceptor)
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     suspend fun request(
@@ -72,18 +71,7 @@ object MiauCareApiClient {
     ): ApiResult<String> = withContext(Dispatchers.IO) {
         val normalizedPath = if (path.startsWith("/")) path else "/$path"
         val primaryUrl = "${baseUrl.trimEnd('/')}$normalizedPath"
-
-        val firstAttempt = executeWithRetry(method, primaryUrl, jsonBody)
-        if (firstAttempt is ApiResult.Error && firstAttempt.statusCode == 0 && autoFallbackToCloud && baseUrl != RENDER_CLOUD_URL) {
-            // Local 10.0.2.2:8080 is not reachable -> seamlessly switch to live Render backend
-            val fallbackUrl = "$RENDER_CLOUD_URL$normalizedPath"
-            val secondAttempt = executeWithRetry(method, fallbackUrl, jsonBody)
-            if (secondAttempt is ApiResult.Success || (secondAttempt is ApiResult.Error && secondAttempt.statusCode != 0)) {
-                baseUrl = RENDER_CLOUD_URL
-                return@withContext secondAttempt
-            }
-        }
-        firstAttempt
+        executeWithRetry(method, primaryUrl, jsonBody)
     }
 
     private suspend fun executeWithRetry(
