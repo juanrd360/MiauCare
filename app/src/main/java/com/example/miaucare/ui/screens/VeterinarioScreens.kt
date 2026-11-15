@@ -61,6 +61,7 @@ fun VetSolicitudScreen(
     var fullName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
     var selectedEspecialidadId by remember { mutableLongStateOf(1L) }
     var specialtyName by remember { mutableStateOf("Cirugía") }
     var cedulaNumber by remember { mutableStateOf("") }
@@ -179,6 +180,23 @@ fun VetSolicitudScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
 
+                McInputField(
+                    label = "Confirma la contraseña",
+                    value = confirmPassword,
+                    onValueChange = { confirmPassword = it; errorBanner = null },
+                    placeholder = "Repite la contraseña",
+                    isPassword = true,
+                    isGlassStyle = true
+                )
+                if (confirmPassword.isNotEmpty() && password != confirmPassword) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Las contraseñas no coinciden",
+                        style = McLabel12Bold.copy(color = McCoralDark)
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+
                 Text(text = "Especialidad Clínica", style = McLabel12Bold)
                 Spacer(modifier = Modifier.height(6.dp))
                 val especialidades = MiauCareRepository.especialidadesCatalog
@@ -222,7 +240,7 @@ fun VetSolicitudScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
 
-                Text(text = "Cédula Profesional (Supabase Storage - carpeta cedulas)", style = McLabel12Bold)
+                Text(text = "Cédula Profesional", style = McLabel12Bold)
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
                     color = McGlassInput,
@@ -306,9 +324,27 @@ fun VetSolicitudScreen(
                     darkText = true,
                     enabled = !MiauCareRepository.isLoading,
                     onClick = {
-                        if (fullName.isBlank() || email.isBlank() || password.length < 8 || cedulaNumber.isBlank()) {
-                            errorBanner = "Completa todos los campos y usa una contraseña de al menos 8 caracteres."
-                            return@McCoralButton
+                        when {
+                            fullName.isBlank() || email.isBlank() || password.isBlank() || confirmPassword.isBlank() || cedulaNumber.isBlank() -> {
+                                errorBanner = "Completa todos los campos obligatorios y confirma tu contraseña."
+                                MiauCareRepository.showToast(errorBanner!!, isError = true)
+                                return@McCoralButton
+                            }
+                            password.length < 8 -> {
+                                errorBanner = "La contraseña debe tener al menos 8 caracteres."
+                                MiauCareRepository.showToast(errorBanner!!, isError = true)
+                                return@McCoralButton
+                            }
+                            password != confirmPassword -> {
+                                errorBanner = "Las contraseñas no coinciden. Verifica que ambas sean iguales."
+                                MiauCareRepository.showToast(errorBanner!!, isError = true)
+                                return@McCoralButton
+                            }
+                            !termsAccepted -> {
+                                errorBanner = "Debes aceptar los términos y la política de privacidad."
+                                MiauCareRepository.showToast(errorBanner!!, isError = true)
+                                return@McCoralButton
+                            }
                         }
                         scope.launch {
                             val bytesToUpload = cedulaBytes ?: run {

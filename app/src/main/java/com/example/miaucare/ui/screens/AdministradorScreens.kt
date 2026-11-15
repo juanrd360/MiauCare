@@ -1711,7 +1711,7 @@ fun AdminZoneIndicatorsScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
-                    Text(text = "CSV Exportado (/api/indicadores/exportar-csv)", style = McTitle16)
+                    Text(text = "Reporte CSV Exportado", style = McTitle16)
                     Spacer(modifier = Modifier.height(10.dp))
                     Surface(
                         color = McBackground,
@@ -2204,7 +2204,7 @@ fun AdminColoniesScreen(
                     ) {
                         Column {
                             Text(text = "Añadir colonia / zona", style = McTitle18)
-                            Text(text = "POST /api/zonas con coordenadas GPS", style = McLabel11Regular)
+                            Text(text = "Registro de zona con coordenadas GPS en Colombia", style = McLabel11Regular)
                         }
                         Surface(
                             color = McSoftNeutral,

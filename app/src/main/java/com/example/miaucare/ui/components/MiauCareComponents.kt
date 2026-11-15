@@ -54,8 +54,10 @@ import com.example.miaucare.ui.theme.*
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
@@ -683,9 +685,32 @@ fun McColonyMapCard(
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     val countText = "${routeList.size} colonias en Colombia"
 
+    // Fuente de tiles reales de Colombia (CartoDB Voyager HD) que no sufre bloqueos 403 por User-Agent
+    val colombiaTileSource = remember {
+        object : OnlineTileSourceBase(
+            "CartoVoyagerColombiaV2",
+            0,
+            20,
+            256,
+            ".png",
+            arrayOf(
+                "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://c.basemaps.cartocdn.com/rastertiles/voyager/"
+            )
+        ) {
+            override fun getTileURLString(pMapTileIndex: Long): String {
+                return baseUrl +
+                    MapTileIndex.getZoom(pMapTileIndex) + "/" +
+                    MapTileIndex.getX(pMapTileIndex) + "/" +
+                    MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
+            }
+        }
+    }
+
     // Solicita ubicación GPS real apenas se muestra el mapa
     LaunchedEffect(Unit) {
-        Configuration.getInstance().userAgentValue = context.packageName
+        Configuration.getInstance().userAgentValue = "MiauCareColombiaApp/2.0 (Android; bogota@miaucare.co)"
         MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
             MiauCareRepository.lastDeviceLat = lat
             MiauCareRepository.lastDeviceLon = lon
@@ -709,9 +734,11 @@ fun McColonyMapCard(
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    Configuration.getInstance().userAgentValue = ctx.packageName
+                    Configuration.getInstance().userAgentValue = "MiauCareColombiaApp/2.0 (Android; bogota@miaucare.co)"
+                    Configuration.getInstance().additionalHttpRequestProperties["Referer"] = "https://miaucare.co"
                     MapView(ctx).apply {
-                        setTileSource(TileSourceFactory.MAPNIK)
+                        tileProvider.clearTileCache()
+                        setTileSource(colombiaTileSource)
                         setMultiTouchControls(true)
                         zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
                         minZoomLevel = 5.5

@@ -450,6 +450,7 @@ fun RegisterVoluntarioScreen(
     var confirmPassword by remember { mutableStateOf("") }
     var termsAccepted by remember { mutableStateOf(true) }
     var isSubmitting by remember { mutableStateOf(false) }
+    var formError by remember { mutableStateOf<String?>(null) }
 
     val initialCoords = remember { MiauCareApiClient.obtainDeviceCoordinates(context) }
     var latitudBase by remember { mutableDoubleStateOf(initialCoords.first) }
@@ -596,7 +597,10 @@ fun RegisterVoluntarioScreen(
                 McInputField(
                     label = "Contraseña",
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        formError = null
+                    },
                     placeholder = "Debe contener mínimo 6 caracteres",
                     isPassword = true,
                     isGlassStyle = true
@@ -606,12 +610,45 @@ fun RegisterVoluntarioScreen(
                 McInputField(
                     label = "Confirma la contraseña",
                     value = confirmPassword,
-                    onValueChange = { confirmPassword = it },
+                    onValueChange = {
+                        confirmPassword = it
+                        formError = null
+                    },
                     placeholder = "Repite la contraseña",
                     isPassword = true,
                     isGlassStyle = true
                 )
+                if (confirmPassword.isNotEmpty() && password != confirmPassword) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Las contraseñas no coinciden",
+                        style = McLabel12Bold.copy(color = McCoralDark)
+                    )
+                } else if (confirmPassword.isNotEmpty() && password == confirmPassword && password.length >= 6) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "✓ Las contraseñas coinciden",
+                        style = McLabel11Regular.copy(color = StatusSanoText, fontWeight = FontWeight.Bold)
+                    )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
+
+                if (formError != null) {
+                    Surface(
+                        color = McCoralSoft,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, McCoralBorder),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        Text(
+                            text = formError!!,
+                            style = McLabel12Bold.copy(color = McCoralDark),
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -647,12 +684,41 @@ fun RegisterVoluntarioScreen(
                     text = if (isSubmitting) "Registrando..." else "Crear cuenta",
                     darkText = true,
                     onClick = {
-                        if (fullName.isBlank() || email.isBlank() || password.isBlank()) {
-                            MiauCareRepository.showToast("Completa nombre, correo y contraseña", isError = true)
-                            return@McCoralButton
+                        when {
+                            fullName.isBlank() || cedula.isBlank() || email.isBlank() || password.isBlank() || confirmPassword.isBlank() -> {
+                                val msg = "Completa todos los campos obligatorios y confirma tu contraseña."
+                                formError = msg
+                                MiauCareRepository.showToast(msg, isError = true)
+                                return@McCoralButton
+                            }
+                            !email.contains("@") -> {
+                                val msg = "Ingresa un correo electrónico válido."
+                                formError = msg
+                                MiauCareRepository.showToast(msg, isError = true)
+                                return@McCoralButton
+                            }
+                            password.length < 6 -> {
+                                val msg = "La contraseña debe tener al menos 6 caracteres."
+                                formError = msg
+                                MiauCareRepository.showToast(msg, isError = true)
+                                return@McCoralButton
+                            }
+                            password != confirmPassword -> {
+                                val msg = "Las contraseñas no coinciden. Verifica que ambas sean iguales."
+                                formError = msg
+                                MiauCareRepository.showToast(msg, isError = true)
+                                return@McCoralButton
+                            }
+                            !termsAccepted -> {
+                                val msg = "Debes aceptar los términos y la política de privacidad."
+                                formError = msg
+                                MiauCareRepository.showToast(msg, isError = true)
+                                return@McCoralButton
+                            }
                         }
                         if (!isSubmitting) {
                             isSubmitting = true
+                            formError = null
                             scope.launch {
                                 val regRes = MiauCareRepository.registrarVoluntario(
                                     nombreCompleto = fullName,
@@ -669,6 +735,7 @@ fun RegisterVoluntarioScreen(
                                     isSubmitting = false
                                     onRegistered()
                                 } else {
+                                    if (regRes is ApiResult.Error) formError = regRes.message
                                     isSubmitting = false
                                 }
                             }
@@ -753,12 +820,33 @@ fun ForgotPasswordScreen(
             placeholder = "Repite la contraseña",
             isPassword = true
         )
+        if (confirmPassword.isNotEmpty() && newPassword != confirmPassword) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Las contraseñas no coinciden",
+                style = McLabel12Bold.copy(color = McCoralDark)
+            )
+        }
         Spacer(modifier = Modifier.height(24.dp))
 
         McCoralButton(
             text = if (isSubmitting) "Actualizando..." else "Restablecer contraseña",
             darkText = true,
             onClick = {
+                when {
+                    correo.isBlank() || newPassword.isBlank() || confirmPassword.isBlank() -> {
+                        MiauCareRepository.showToast("Completa correo y ambas contraseñas", isError = true)
+                        return@McCoralButton
+                    }
+                    newPassword.length < 6 -> {
+                        MiauCareRepository.showToast("La contraseña debe tener al menos 6 caracteres", isError = true)
+                        return@McCoralButton
+                    }
+                    newPassword != confirmPassword -> {
+                        MiauCareRepository.showToast("Las contraseñas no coinciden", isError = true)
+                        return@McCoralButton
+                    }
+                }
                 if (!isSubmitting) {
                     isSubmitting = true
                     scope.launch {
@@ -2202,7 +2290,7 @@ fun ReportUnregisteredCatScreen(
             Spacer(modifier = Modifier.width(12.dp))
             Column {
                 Text(text = "Reportar gato no censado", style = McTitle18)
-                Text(text = "Subida a Supabase Storage + Alerta de rescate", style = McLabel11Regular)
+                Text(text = "Evidencia fotográfica y alerta de rescate", style = McLabel11Regular)
             }
         }
 
@@ -2703,7 +2791,7 @@ fun VoluntarioProfileScreen(
         ) {
             Column {
                 Text(text = "Mi Perfil", style = McTitle24)
-                Text(text = "GET /api/voluntarios/${MiauCareRepository.sessionUserId}", style = McBody14Regular)
+                Text(text = "Información personal y zona asignada", style = McBody14Regular)
             }
             Surface(
                 color = McCardWhite,
