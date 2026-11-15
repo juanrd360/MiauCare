@@ -376,9 +376,9 @@ fun McBackCircleButton(
 ) {
     if (isTranslucentOnPhoto) {
         Surface(
-            color = Color(0x33FFFFFF),
+            color = Color(0x55000000),
             shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, Color(0x88FFFFFF)),
+            border = BorderStroke(1.dp, Color(0xCCFFFFFF)),
             modifier = Modifier
                 .size(40.dp)
                 .clickable { onClick() }
@@ -505,10 +505,10 @@ fun McInputField(
             },
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = if (isGlassStyle) McGlassInput else McCardWhite,
-                unfocusedContainerColor = if (isGlassStyle) McGlassInput else McCardWhite,
-                focusedBorderColor = if (isGlassStyle) Color(0x88FFFFFF) else McBorder,
-                unfocusedBorderColor = if (isGlassStyle) Color(0x66FFFFFF) else McBorder,
+                focusedContainerColor = if (isGlassStyle) Color(0xD9F0ECE7) else McCardWhite,
+                unfocusedContainerColor = if (isGlassStyle) Color(0xBFEAE5DE) else McCardWhite,
+                focusedBorderColor = if (isGlassStyle) Color(0xE6FFFFFF) else McBorder,
+                unfocusedBorderColor = if (isGlassStyle) Color(0xB3FFFFFF) else McBorder,
                 focusedTextColor = McTextPrimary,
                 unfocusedTextColor = McTextPrimary
             ),

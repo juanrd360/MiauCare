@@ -9,7 +9,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.navigation.MiauCareApp
 import com.example.miaucare.ui.screens.AdminHomeScreen
-import com.example.miaucare.ui.screens.BienvenidaScreen
+import com.example.miaucare.ui.screens.LoginScreen
 import com.example.miaucare.ui.screens.VetDashboardScreen
 import com.example.miaucare.ui.screens.VoluntarioHomeScreen
 import com.example.miaucare.ui.theme.MiaucareTheme
@@ -27,15 +27,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "1. Bienvenida")
+@Preview(showBackground = true, widthDp = 390, heightDp = 844, name = "1. Inicia Sesión")
 @Composable
-fun PreviewBienvenida() {
+fun PreviewLogin() {
     MiaucareTheme {
-        BienvenidaScreen(
-            onLoginClick = {},
+        LoginScreen(
+            onBack = {},
+            onLoginSuccess = {},
+            onForgotPasswordClick = {},
             onRegisterVoluntarioClick = {},
-            onRegisterVeterinarioClick = {},
-            onQuickRoleJump = {}
+            onRegisterVeterinarioClick = {}
         )
     }
 }
@@ -61,8 +62,7 @@ fun PreviewVetDashboard() {
     MiaucareTheme {
         VetDashboardScreen(
             onOpenClinicalRecord = {},
-            onOpenMedicalAlerts = {},
-            onRoleSwitch = {}
+            onOpenMedicalAlerts = {}
         )
     }
 }
@@ -72,8 +72,7 @@ fun PreviewVetDashboard() {
 fun PreviewAdminHome() {
     MiaucareTheme {
         AdminHomeScreen(
-            onNavigate = {},
-            onRoleSwitch = {}
+            onNavigate = {}
         )
     }
 }

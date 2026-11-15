@@ -395,8 +395,7 @@ fun VetSolicitudScreen(
 @Composable
 fun VetDashboardScreen(
     onOpenClinicalRecord: (String) -> Unit,
-    onOpenMedicalAlerts: () -> Unit,
-    onRoleSwitch: (MiauRole) -> Unit
+    onOpenMedicalAlerts: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -426,9 +425,6 @@ fun VetDashboardScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 12.dp, bottom = 110.dp)
     ) {
-        McRolePrototypeSwitcher(onRoleSelected = onRoleSwitch)
-        Spacer(modifier = Modifier.height(14.dp))
-
         // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -2419,8 +2415,7 @@ fun VetAgendaScreen(
 // =========================================================================
 @Composable
 fun VetProfileScreen(
-    onLogout: () -> Unit,
-    onRoleSwitch: (MiauRole) -> Unit
+    onLogout: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -2580,10 +2575,5 @@ fun VetProfileScreen(
                 onLogout()
             }
         )
-
-        Spacer(modifier = Modifier.height(18.dp))
-        Text(text = "Cambiar vista de rol:", style = McLabel11Regular)
-        Spacer(modifier = Modifier.height(6.dp))
-        McRolePrototypeSwitcher(onRoleSelected = onRoleSwitch)
     }
 }

@@ -45,7 +45,7 @@ fun MiauCareApp(
             MiauRole.ADMINISTRADOR -> "admin_home"
         }
         navController.navigate(target) {
-            popUpTo("bienvenida") { inclusive = false }
+            popUpTo("login") { inclusive = true }
             launchSingleTop = true
         }
     }
@@ -68,28 +68,24 @@ fun MiauCareApp(
             composable("splash") {
                 SplashScreen(
                     onFinished = {
-                        navController.navigate("bienvenida") {
+                        navController.navigate("login") {
                             popUpTo("splash") { inclusive = true }
                         }
                     }
                 )
             }
 
-            composable("bienvenida") {
-                BienvenidaScreen(
-                    onLoginClick = { navController.navigate("login") },
-                    onRegisterVoluntarioClick = { navController.navigate("register_voluntario") },
-                    onRegisterVeterinarioClick = { navController.navigate("vet_solicitud") },
-                    onQuickRoleJump = navigateToRoleHome
-                )
-            }
-
             composable("login") {
                 LoginScreen(
-                    onBack = { navController.popBackStack() },
+                    onBack = {
+                        if (navController.previousBackStackEntry != null) {
+                            navController.popBackStack()
+                        }
+                    },
                     onLoginSuccess = navigateToRoleHome,
                     onForgotPasswordClick = { navController.navigate("forgot_password") },
-                    onRegisterClick = { navController.navigate("register_voluntario") }
+                    onRegisterVoluntarioClick = { navController.navigate("register_voluntario") },
+                    onRegisterVeterinarioClick = { navController.navigate("vet_solicitud") }
                 )
             }
 
@@ -187,7 +183,7 @@ fun MiauCareApp(
                 VoluntarioProfileScreen(
                     onOpenNotifications = { navController.navigate("vol_notifications") },
                     onLogout = {
-                        navController.navigate("bienvenida") {
+                        navController.navigate("login") {
                             popUpTo(0) { inclusive = true }
                         }
                     },
@@ -210,8 +206,7 @@ fun MiauCareApp(
                 MiauCareRepository.currentRole = MiauRole.VETERINARIO
                 VetDashboardScreen(
                     onOpenClinicalRecord = { catId -> navController.navigate("vet_clinical_record/$catId") },
-                    onOpenMedicalAlerts = { navController.navigate("vet_medical_alerts") },
-                    onRoleSwitch = navigateToRoleHome
+                    onOpenMedicalAlerts = { navController.navigate("vet_medical_alerts") }
                 )
             }
 
@@ -252,11 +247,10 @@ fun MiauCareApp(
                 MiauCareRepository.currentRole = MiauRole.VETERINARIO
                 VetProfileScreen(
                     onLogout = {
-                        navController.navigate("bienvenida") {
+                        navController.navigate("login") {
                             popUpTo(0) { inclusive = true }
                         }
-                    },
-                    onRoleSwitch = navigateToRoleHome
+                    }
                 )
             }
 
@@ -266,8 +260,7 @@ fun MiauCareApp(
             composable("admin_home") {
                 MiauCareRepository.currentRole = MiauRole.ADMINISTRADOR
                 AdminHomeScreen(
-                    onNavigate = { route -> navController.navigate(route) },
-                    onRoleSwitch = navigateToRoleHome
+                    onNavigate = { route -> navController.navigate(route) }
                 )
             }
 
@@ -351,7 +344,7 @@ fun MiauCareApp(
                 AdminProfileScreen(
                     onBack = { navController.popBackStack() },
                     onLogout = {
-                        navController.navigate("bienvenida") {
+                        navController.navigate("login") {
                             popUpTo(0) { inclusive = true }
                         }
                     }

@@ -25,8 +25,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
@@ -50,7 +52,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // =========================================================================
-// 1. SPLASH INICIO (`Splash Inicio`)
+// 1. SPLASH INICIO (`Splash Inicio` - Pantalla de carga Figma)
 // =========================================================================
 @Composable
 fun SplashScreen(
@@ -69,47 +71,66 @@ fun SplashScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(McBackground)
-            .clickable { onFinished() },
-        contentAlignment = Alignment.Center
+            .clickable { onFinished() }
     ) {
         McCatImage(
             resId = R.drawable.img_logo_miaucare,
             contentDescription = "MiauCare Logo",
             contentScale = ContentScale.Fit,
             modifier = Modifier
-                .width(230.dp)
-                .height(250.dp)
+                .align(Alignment.Center)
+                .width(215.dp)
+                .height(225.dp)
+        )
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp)
+                .width(124.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0x1A000000))
         )
     }
 }
 
 // =========================================================================
-// 2. BIENVENIDA (`Bienvenida` + Modal `¿Eres voluntario o veterinario?`)
+// 2. INICIO DE SESIÓN LITERAL A FIGMA (`Inicio de sesion` + Modal `¿Eres voluntario o veterinario?`)
 // =========================================================================
 @Composable
-fun BienvenidaScreen(
-    onLoginClick: () -> Unit,
+fun LoginScreen(
+    onBack: () -> Unit,
+    onLoginSuccess: (MiauRole) -> Unit,
+    onForgotPasswordClick: () -> Unit,
     onRegisterVoluntarioClick: () -> Unit,
-    onRegisterVeterinarioClick: () -> Unit,
-    onQuickRoleJump: (MiauRole) -> Unit
+    onRegisterVeterinarioClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var backendError by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
     var showRoleModal by remember { mutableStateOf(false) }
+
+    val glassShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(McBackground)
+            .background(Color(0xFF1F1C18))
     ) {
+        // Fotografía completa de gato como en Figma `Inicio de sesion`
         McCatImage(
             resId = R.drawable.img_cat_hero,
             contentDescription = "Gato MiauCare",
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.75f)
-                .align(Alignment.TopCenter)
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
         )
 
+        // Sutil degradado inferior para legibilidad sobre el vidrio translúcido
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -118,60 +139,172 @@ fun BienvenidaScreen(
                         colors = listOf(
                             Color.Transparent,
                             Color.Transparent,
-                            McBackground.copy(alpha = 0.65f),
-                            McBackground
+                            Color(0x26000000),
+                            Color(0x55EAE5DD)
                         )
                     )
                 )
         )
 
-        Surface(
-            color = McCardWhite.copy(alpha = 0.78f),
-            shape = RoundedCornerShape(32.dp),
-            border = BorderStroke(1.dp, McCardWhite),
-            shadowElevation = 6.dp,
+        // Botón superior izquierdo `<` estilo Figma
+        Box(
+            modifier = Modifier
+                .statusBarsPadding()
+                .padding(start = 20.dp, top = 16.dp)
+        ) {
+            McBackCircleButton(onClick = onBack, isTranslucentOnPhoto = true)
+        }
+
+        // Tarjeta glass translúcida inferior exacta a Figma (`Inicio de sesion`)
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 18.dp)
+                .clip(glassShape)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0x4DFFFFFF),
+                            Color(0x88F6F4F1),
+                            Color(0xCCF6F4F1)
+                        )
+                    )
+                )
+                .border(1.dp, Color(0xCCFFFFFF), glassShape)
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 22.dp)
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 22.dp)
             ) {
                 Text(
-                    text = "Bienvenido a\nMiauCare",
-                    style = McTitle28.copy(fontSize = 28.sp, lineHeight = 34.sp)
+                    text = "Inicia Sesión",
+                    style = McTitle28.copy(
+                        color = McCardWhite,
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Bold,
+                        shadow = Shadow(
+                            color = Color(0x55000000),
+                            offset = Offset(0f, 2f),
+                            blurRadius = 8f
+                        )
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Error de autenticación (401 / 403 Veterinario pendiente o rechazado)
+                if (backendError != null) {
+                    Surface(
+                        color = McCoralSoft,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, McCoralBorder),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = McCoralDark,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = backendError!!,
+                                style = McLabel12Bold.copy(color = McCoralDark)
+                            )
+                        }
+                    }
+                }
+
+                McInputField(
+                    label = "Correo Electronico",
+                    value = email,
+                    onValueChange = {
+                        email = it
+                        backendError = null
+                    },
+                    placeholder = "helloworld@gmail.com",
+                    isGlassStyle = true,
+                    showCheckEndIcon = email.contains("@") && email.contains(".")
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                McInputField(
+                    label = "Contraseña",
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        backendError = null
+                    },
+                    placeholder = "••••••••",
+                    isPassword = true,
+                    isGlassStyle = true
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
-                    text = "La plataforma integral para el bienestar felino y las rondas de revisión.",
-                    style = McBody14Regular.copy(color = McTextPrimary.copy(alpha = 0.8f))
+                    text = "Olvido la contraseña?",
+                    style = McLabel12Bold.copy(
+                        color = McTextPrimary.copy(alpha = 0.85f),
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.Start)
+                        .clickable { onForgotPasswordClick() }
                 )
-                Spacer(modifier = Modifier.height(20.dp))
+
+                Spacer(modifier = Modifier.height(18.dp))
 
                 McCoralButton(
-                    text = "Iniciar Sesión",
+                    text = if (isSubmitting) "Autenticando..." else "Iniciar Sesión",
                     darkText = true,
-                    onClick = onLoginClick
+                    onClick = {
+                        if (email.isBlank() || password.isBlank()) {
+                            backendError = "Ingresa tu correo electrónico y contraseña."
+                            return@McCoralButton
+                        }
+                        if (!isSubmitting) {
+                            isSubmitting = true
+                            backendError = null
+                            scope.launch {
+                                val res = MiauCareRepository.login(context, email, password)
+                                isSubmitting = false
+                                when (res) {
+                                    is ApiResult.Success -> onLoginSuccess(res.data)
+                                    is ApiResult.Error -> backendError = res.message
+                                }
+                            }
+                        }
+                    }
                 )
-                Spacer(modifier = Modifier.height(10.dp))
 
-                OutlinedButton(
-                    onClick = { showRoleModal = true },
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(999.dp),
-                    border = BorderStroke(1.dp, McCardWhite),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = McCardWhite.copy(alpha = 0.65f),
-                        contentColor = McTextPrimary
-                    )
+                        .clickable { showRoleModal = true }
                 ) {
                     Text(
-                        text = "Crear Cuenta",
-                        style = McBody14Bold
+                        text = "No tienes ninguna cuenta?",
+                        style = McBody14Regular.copy(
+                            color = McTextPrimary.copy(alpha = 0.78f),
+                            fontSize = 13.sp
+                        )
+                    )
+                    Text(
+                        text = "Registrate",
+                        style = McBody14Bold.copy(
+                            color = McTextPrimary,
+                            fontSize = 14.sp
+                        )
                     )
                 }
             }
@@ -237,194 +370,6 @@ fun BienvenidaScreen(
                         }
                     )
                 }
-            }
-        }
-    }
-}
-
-// =========================================================================
-// 3. INICIO DE SESIÓN (`POST /api/auth/login` + Manejo de 401 y 403 Veterinario)
-// =========================================================================
-@Composable
-fun LoginScreen(
-    onBack: () -> Unit,
-    onLoginSuccess: (MiauRole) -> Unit,
-    onForgotPasswordClick: () -> Unit,
-    onRegisterClick: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf("adminmiaucare@administrador.com") }
-    var password by remember { mutableStateOf("Admin1234") }
-    var backendError by remember { mutableStateOf<String?>(null) }
-    var isSubmitting by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(McBackground)
-    ) {
-        McCatImage(
-            resId = R.drawable.img_cat_hero,
-            contentDescription = "Gato MiauCare",
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.55f)
-                .align(Alignment.TopCenter)
-        )
-
-        Box(
-            modifier = Modifier
-                .statusBarsPadding()
-                .padding(start = 20.dp, top = 16.dp)
-        ) {
-            McBackCircleButton(onClick = onBack, isTranslucentOnPhoto = true)
-        }
-
-        Surface(
-            color = McBackground.copy(alpha = 0.92f),
-            shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-            border = BorderStroke(1.dp, McCardWhite),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 22.dp)
-            ) {
-                Text(text = "Inicia Sesión", style = McTitle28)
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Quick credentials fill for Admin precargado
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        color = McSoftNeutral,
-                        shape = RoundedCornerShape(999.dp),
-                        modifier = Modifier.clickable {
-                            email = "adminmiaucare@administrador.com"
-                            password = "Admin1234"
-                            backendError = null
-                        }
-                    ) {
-                        Text(
-                            text = "Admin precargado",
-                            style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.Bold, fontSize = 10.sp),
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Display 403 Forbidden (solicitud pendiente/rechazada/inactiva) or 401 Unauthorized message
-                if (backendError != null) {
-                    Surface(
-                        color = McCoralSoft,
-                        shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, McCoralBorder),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.ErrorOutline,
-                                contentDescription = null,
-                                tint = McCoralDark,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = backendError!!,
-                                style = McLabel12Bold.copy(color = McCoralDark)
-                            )
-                        }
-                    }
-                }
-
-                McInputField(
-                    label = "Correo Electronico",
-                    value = email,
-                    onValueChange = {
-                        email = it
-                        backendError = null
-                    },
-                    isGlassStyle = true,
-                    showCheckEndIcon = email.contains("@")
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                McInputField(
-                    label = "Contraseña",
-                    value = password,
-                    onValueChange = {
-                        password = it
-                        backendError = null
-                    },
-                    isPassword = true,
-                    isGlassStyle = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Olvido la contraseña?",
-                    style = McLabel12Bold.copy(color = McTextSecondary),
-                    modifier = Modifier
-                        .align(Alignment.End)
-                        .clickable { onForgotPasswordClick() }
-                )
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                McCoralButton(
-                    text = if (isSubmitting) "Autenticando..." else "Iniciar Sesión",
-                    darkText = true,
-                    onClick = {
-                        if (!isSubmitting) {
-                            isSubmitting = true
-                            backendError = null
-                            scope.launch {
-                                val res = MiauCareRepository.login(context, email, password)
-                                isSubmitting = false
-                                when (res) {
-                                    is ApiResult.Success -> onLoginSuccess(res.data)
-                                    is ApiResult.Error -> backendError = res.message
-                                }
-                            }
-                        }
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = buildAnnotatedString {
-                        append("No tienes ninguna cuenta? ")
-                        withStyle(
-                            SpanStyle(
-                                fontWeight = FontWeight.Bold,
-                                color = McTextPrimary,
-                                textDecoration = TextDecoration.Underline
-                            )
-                        ) {
-                            append("Registrate")
-                        }
-                    },
-                    style = McBody14Regular.copy(color = McTextPrimary),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onRegisterClick() }
-                )
             }
         }
     }

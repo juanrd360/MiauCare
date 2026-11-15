@@ -45,8 +45,7 @@ import java.util.Locale
 // =========================================================================
 @Composable
 fun AdminHomeScreen(
-    onNavigate: (String) -> Unit,
-    onRoleSwitch: (MiauRole) -> Unit
+    onNavigate: (String) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -70,46 +69,63 @@ fun AdminHomeScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 12.dp, bottom = 110.dp)
     ) {
-        McRolePrototypeSwitcher(
-            onRoleSelected = onRoleSwitch,
-            onOpenAdminTools = { showToolsModal = true }
-        )
-        Spacer(modifier = Modifier.height(14.dp))
-
         // Header
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(text = "MiauCare · Administración", style = McLabel11Regular)
                 Text(
                     text = "Hola, ${MiauCareRepository.sessionUserName.ifBlank { "Admin" }}",
                     style = McTitle24
                 )
-                Text(
-                    text = MiauCareRepository.sessionUserEmail.ifBlank { "adminmiaucare@administrador.com" },
-                    style = McLabel11Regular
-                )
-            }
-            Surface(
-                color = McCardWhite,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.clickable { onNavigate("admin_profile") }
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.PersonOutline,
-                        contentDescription = "Mi perfil",
-                        tint = McTextPrimary,
-                        modifier = Modifier.size(18.dp)
+                if (MiauCareRepository.sessionUserEmail.isNotBlank()) {
+                    Text(
+                        text = MiauCareRepository.sessionUserEmail,
+                        style = McLabel11Regular
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(text = "Mi perfil", style = McLabel11Regular.copy(fontSize = 10.sp, color = McTextPrimary))
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    color = McCoral,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clickable { showToolsModal = true }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Outlined.Tune,
+                            contentDescription = "Herramientas",
+                            tint = McCardWhite,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                }
+                Surface(
+                    color = McCardWhite,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.clickable { onNavigate("admin_profile") }
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PersonOutline,
+                            contentDescription = "Mi perfil",
+                            tint = McTextPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(text = "Mi perfil", style = McLabel11Regular.copy(fontSize = 10.sp, color = McTextPrimary))
+                    }
                 }
             }
         }
@@ -2771,7 +2787,7 @@ fun AdminProfileScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf(MiauCareRepository.sessionUserName.ifBlank { "Administrador MiauCare" }) }
-    var email by remember { mutableStateOf(MiauCareRepository.sessionUserEmail.ifBlank { "adminmiaucare@administrador.com" }) }
+    var email by remember { mutableStateOf(MiauCareRepository.sessionUserEmail) }
 
     Column(
         modifier = Modifier
