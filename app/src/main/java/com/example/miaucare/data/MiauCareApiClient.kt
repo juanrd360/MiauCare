@@ -4,8 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import android.net.Uri
+import android.os.Bundle
+import android.os.Looper
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
@@ -245,8 +249,17 @@ object MiauCareApiClient {
     }
 
     /**
+     * Verifica si una coordenada está dentro de los límites geográficos de Colombia.
+     * Evita que el emulador de Android Studio (que por defecto reporta Mountain View, EE.UU. 37.42, -122.08)
+     * mueva el mapa fuera de Colombia, manteniendo siempre la geolocalización real en territorio colombiano.
+     */
+    fun isInsideColombia(lat: Double, lon: Double): Boolean {
+        return lat in -4.5..14.0 && lon in -82.0..-66.0
+    }
+
+    /**
      * Obtiene la latitud y longitud reales del dispositivo (GPS / Red),
-     * con fallback a coordenadas base en Bogotá si el emulador aún no reporta fix GPS.
+     * validando que correspondan a Colombia o usando la última ubicación activa en Colombia (Bogotá).
      */
     @SuppressLint("MissingPermission")
     fun obtainDeviceCoordinates(context: Context): Pair<Double, Double> {
@@ -257,15 +270,96 @@ object MiauCareApiClient {
                 LocationManager.NETWORK_PROVIDER,
                 LocationManager.PASSIVE_PROVIDER
             )
+            var bestLocation: Location? = null
             for (provider in providers) {
                 val loc = try { lm?.getLastKnownLocation(provider) } catch (_: SecurityException) { null }
                 if (loc != null && (loc.latitude != 0.0 || loc.longitude != 0.0)) {
-                    return loc.latitude to loc.longitude
+                    if (bestLocation == null || loc.time > bestLocation.time) {
+                        bestLocation = loc
+                    }
                 }
             }
-            4.6533 to -74.0836
+            if (bestLocation != null && isInsideColombia(bestLocation.latitude, bestLocation.longitude)) {
+                MiauCareRepository.lastDeviceLat = bestLocation.latitude
+                MiauCareRepository.lastDeviceLon = bestLocation.longitude
+                return bestLocation.latitude to bestLocation.longitude
+            }
+            val currentLat = MiauCareRepository.lastDeviceLat
+            val currentLon = MiauCareRepository.lastDeviceLon
+            if (isInsideColombia(currentLat, currentLon)) {
+                currentLat to currentLon
+            } else {
+                4.6243 to -74.0636
+            }
         } catch (_: Exception) {
-            4.6533 to -74.0836
+            4.6243 to -74.0636
+        }
+    }
+
+    /**
+     * Solicita una actualización en tiempo real al receptor GPS / Red del dispositivo
+     * y entrega las coordenadas reales en Colombia.
+     */
+    @SuppressLint("MissingPermission")
+    fun requestRealtimeColombiaLocation(
+        context: Context,
+        onLocationResult: (Double, Double) -> Unit
+    ) {
+        try {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            if (lm == null) {
+                val (lat, lon) = obtainDeviceCoordinates(context)
+                onLocationResult(lat, lon)
+                return
+            }
+
+            var delivered = false
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    if (delivered) return
+                    delivered = true
+                    try {
+                        lm.removeUpdates(this)
+                    } catch (_: Exception) {}
+                    if (isInsideColombia(location.latitude, location.longitude)) {
+                        MiauCareRepository.lastDeviceLat = location.latitude
+                        MiauCareRepository.lastDeviceLon = location.longitude
+                        onLocationResult(location.latitude, location.longitude)
+                    } else {
+                        val (lat, lon) = obtainDeviceCoordinates(context)
+                        onLocationResult(lat, lon)
+                    }
+                }
+
+                @Deprecated("Deprecated in Android API")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }
+
+            val hasGps = try { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) } catch (_: Exception) { false }
+            val hasNet = try { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) } catch (_: Exception) { false }
+
+            if (hasGps) {
+                try {
+                    lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
+                } catch (_: SecurityException) {}
+            }
+            if (hasNet) {
+                try {
+                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0L, 0f, listener, Looper.getMainLooper())
+                } catch (_: SecurityException) {}
+            }
+
+            // Entrega inmediata de la lectura actual mientras el GPS confirma fix satelital
+            val (initialLat, initialLon) = obtainDeviceCoordinates(context)
+            if (!delivered) {
+                delivered = true
+                onLocationResult(initialLat, initialLon)
+            }
+        } catch (_: Exception) {
+            val (lat, lon) = obtainDeviceCoordinates(context)
+            onLocationResult(lat, lon)
         }
     }
 }

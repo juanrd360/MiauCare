@@ -139,9 +139,6 @@ fun BienvenidaScreen(
             Column(
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 22.dp)
             ) {
-                McServerConnectionChip(context = context)
-                Spacer(modifier = Modifier.height(12.dp))
-
                 Text(
                     text = "Bienvenido a\nMiauCare",
                     style = McTitle28.copy(fontSize = 28.sp, lineHeight = 34.sp)
@@ -298,9 +295,6 @@ fun LoginScreen(
                     .navigationBarsPadding()
                     .padding(horizontal = 24.dp, vertical = 22.dp)
             ) {
-                McServerConnectionChip(context = context)
-                Spacer(modifier = Modifier.height(10.dp))
-
                 Text(text = "Inicia Sesión", style = McTitle28)
                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -464,10 +458,11 @@ fun RegisterVoluntarioScreen(
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) {
-        val coords = MiauCareApiClient.obtainDeviceCoordinates(context)
-        latitudBase = coords.first
-        longitudBase = coords.second
-        MiauCareRepository.showToast("Coordenadas GPS obtenidas: $latitudBase, $longitudBase")
+        MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
+            latitudBase = lat
+            longitudBase = lon
+            MiauCareRepository.showToast("Coordenadas GPS en Colombia: $latitudBase, $longitudBase")
+        }
     }
 
     Box(
@@ -821,9 +816,10 @@ fun VoluntarioHomeScreen(
     val gpsPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) {
-        val (lat, lon) = MiauCareApiClient.obtainDeviceCoordinates(context)
-        scope.launch {
-            MiauCareRepository.actualizarUbicacionGpsVoluntario(lat, lon)
+        MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
+            scope.launch {
+                MiauCareRepository.actualizarUbicacionGpsVoluntario(lat, lon)
+            }
         }
     }
 

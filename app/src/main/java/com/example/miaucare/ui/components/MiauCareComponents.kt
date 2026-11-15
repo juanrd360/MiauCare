@@ -1,5 +1,11 @@
 package com.example.miaucare.ui.components
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Paint
+import android.graphics.drawable.BitmapDrawable
+import android.view.MotionEvent
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -29,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -37,11 +44,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import com.example.miaucare.data.ColonyItem
 import com.example.miaucare.data.MiauCareApiClient
 import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.data.MiauRole
 import com.example.miaucare.ui.theme.*
+import kotlinx.coroutines.launch
+import org.osmdroid.config.Configuration
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
+import java.util.Locale
 
 
 @Composable
@@ -538,121 +558,284 @@ fun McSearchBar(
 }
 
 // =========================================================================
-// 5. INTERACTIVE COLONY MAP (`Voluntario · Inicio` + GET /api/zonas/ruta)
+// 5. MAPA REAL DE COLOMBIA CON GPS EN VIVO (`Voluntario · Inicio` + GET /api/zonas/ruta)
 // =========================================================================
+private fun createUserGpsMarkerDrawable(context: Context): BitmapDrawable {
+    val sizePx = (34f * context.resources.displayMetrics.density).toInt().coerceAtLeast(36)
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bmp)
+    val cx = sizePx / 2f
+    val cy = sizePx / 2f
+
+    val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(75, 241, 120, 101)
+        style = Paint.Style.FILL
+    }
+    val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.FILL
+    }
+    val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.rgb(241, 120, 101)
+        style = Paint.Style.FILL
+    }
+
+    canvas.drawCircle(cx, cy, sizePx * 0.46f, haloPaint)
+    canvas.drawCircle(cx, cy, sizePx * 0.27f, whitePaint)
+    canvas.drawCircle(cx, cy, sizePx * 0.19f, dotPaint)
+    return BitmapDrawable(context.resources, bmp)
+}
+
+private fun createColonyMarkerDrawable(context: Context, indexNumber: Int): BitmapDrawable {
+    val density = context.resources.displayMetrics.density
+    val sizePx = (38f * density).toInt().coerceAtLeast(40)
+    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bmp)
+    val cx = sizePx / 2f
+    val cy = sizePx / 2f
+
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.rgb(241, 120, 101)
+        style = Paint.Style.FILL
+    }
+    val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.rgb(26, 26, 26)
+        style = Paint.Style.FILL
+    }
+    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 13f * density
+        textAlign = Paint.Align.CENTER
+        isFakeBoldText = true
+    }
+
+    canvas.drawCircle(cx, cy, sizePx * 0.44f, borderPaint)
+    canvas.drawCircle(cx, cy, sizePx * 0.35f, innerPaint)
+    val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2f
+    canvas.drawText(indexNumber.toString(), cx, textY, textPaint)
+    return BitmapDrawable(context.resources, bmp)
+}
+
 @Composable
 fun McColonyMapCard(
     onAddClick: () -> Unit,
     onColonyPinClick: () -> Unit,
     onUseGpsClick: (() -> Unit)? = null
 ) {
-    val routeList = MiauCareRepository.routeColonies.ifEmpty { MiauCareRepository.colonies }
-    val countText = if (routeList.isNotEmpty()) "${routeList.size} colonias cerca" else "3 colonias cerca"
-    val firstStop = routeList.getOrNull(0)
-    val secondStop = routeList.getOrNull(1)
-    val thirdStop = routeList.getOrNull(2)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val defaultColombiaColonies = remember {
+        listOf(
+            ColonyItem(
+                numericId = 1L,
+                id = "1",
+                name = "Colonia Norte",
+                zoneName = "Zona Norte",
+                address = "Parque del Virrey, Bogotá",
+                feedingTime = "07:30",
+                latitud = 4.6533,
+                longitud = -74.0836,
+                cantidadGatos = 6,
+                catsCountText = "6 gatos",
+                ordenParada = 1
+            ),
+            ColonyItem(
+                numericId = 2L,
+                id = "2",
+                name = "Colonia Centro",
+                zoneName = "Zona Centro",
+                address = "Parque Nacional, Bogotá",
+                feedingTime = "08:00",
+                latitud = 4.6097,
+                longitud = -74.0817,
+                cantidadGatos = 8,
+                catsCountText = "8 gatos",
+                ordenParada = 2
+            ),
+            ColonyItem(
+                numericId = 3L,
+                id = "3",
+                name = "Colonia Sur",
+                zoneName = "Zona Sur",
+                address = "Ciudad Jardín, Bogotá",
+                feedingTime = "08:30",
+                latitud = 4.5780,
+                longitud = -74.0940,
+                cantidadGatos = 5,
+                catsCountText = "5 gatos",
+                ordenParada = 3
+            )
+        )
+    }
+
+    val routeList = MiauCareRepository.routeColonies
+        .ifEmpty { MiauCareRepository.colonies }
+        .ifEmpty { defaultColombiaColonies }
+
+    val userLat = MiauCareRepository.lastDeviceLat.takeIf {
+        MiauCareApiClient.isInsideColombia(it, MiauCareRepository.lastDeviceLon)
+    } ?: 4.6243
+    val userLon = MiauCareRepository.lastDeviceLon.takeIf {
+        MiauCareApiClient.isInsideColombia(MiauCareRepository.lastDeviceLat, it)
+    } ?: -74.0636
+
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+    val countText = "${routeList.size} colonias en Colombia"
+
+    // Solicita ubicación GPS real apenas se muestra el mapa
+    LaunchedEffect(Unit) {
+        Configuration.getInstance().userAgentValue = context.packageName
+        MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
+            MiauCareRepository.lastDeviceLat = lat
+            MiauCareRepository.lastDeviceLon = lon
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            mapViewRef?.onDetach()
+        }
+    }
 
     Column {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(235.dp)
+                .height(265.dp)
                 .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xFFFAF8F5))
+                .background(Color(0xFFEDEAE2))
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val w = size.width
-                val h = size.height
-                val beigeBlock = Color(0xFFEBE6DC)
-                val pinkParkBlock = Color(0xFFF9E5E1)
-                val roadLine = Color(0xFFE2DDD3)
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    Configuration.getInstance().userAgentValue = ctx.packageName
+                    MapView(ctx).apply {
+                        setTileSource(TileSourceFactory.MAPNIK)
+                        setMultiTouchControls(true)
+                        zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                        minZoomLevel = 5.5
+                        maxZoomLevel = 19.5
+                        controller.setZoom(13.0)
+                        controller.setCenter(GeoPoint(userLat, userLon))
 
-                drawRoundRect(beigeBlock, Offset(w * 0.04f, h * 0.14f), Size(w * 0.25f, h * 0.22f), CornerRadius(12f))
-                drawRoundRect(beigeBlock, Offset(w * 0.33f, h * 0.06f), Size(w * 0.23f, h * 0.30f), CornerRadius(12f))
-                drawRoundRect(beigeBlock, Offset(w * 0.60f, h * 0.06f), Size(w * 0.20f, h * 0.30f), CornerRadius(12f))
-                drawRoundRect(beigeBlock, Offset(w * 0.84f, h * 0.06f), Size(w * 0.12f, h * 0.30f), CornerRadius(12f))
+                        // Permite mover y hacer zoom en el mapa sin que el ScrollView vertical intercepte el gesto
+                        setOnTouchListener { v, event ->
+                            when (event.actionMasked) {
+                                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                                    v.parent?.requestDisallowInterceptTouchEvent(false)
+                            }
+                            false
+                        }
+                        onResume()
+                        mapViewRef = this
+                    }
+                },
+                update = { mapView ->
+                    mapView.overlays.clear()
 
-                drawRoundRect(beigeBlock, Offset(w * 0.04f, h * 0.44f), Size(w * 0.20f, h * 0.22f), CornerRadius(12f))
-                drawRoundRect(pinkParkBlock, Offset(w * 0.27f, h * 0.44f), Size(w * 0.20f, h * 0.22f), CornerRadius(16f))
-                drawRoundRect(pinkParkBlock, Offset(w * 0.58f, h * 0.44f), Size(w * 0.22f, h * 0.26f), CornerRadius(16f))
-                drawRoundRect(beigeBlock, Offset(w * 0.84f, h * 0.44f), Size(w * 0.12f, h * 0.26f), CornerRadius(12f))
+                    // Permite tocar cualquier punto del mapa de Colombia para mover/actualizar tu ubicación GPS en tiempo real
+                    val receiver = object : MapEventsReceiver {
+                        override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                            if (p != null && MiauCareApiClient.isInsideColombia(p.latitude, p.longitude)) {
+                                MiauCareRepository.lastDeviceLat = p.latitude
+                                MiauCareRepository.lastDeviceLon = p.longitude
+                                mapView.controller.animateTo(p)
+                                scope.launch {
+                                    if (MiauCareRepository.sessionUserId > 0L &&
+                                        MiauCareRepository.currentRole == MiauRole.VOLUNTARIO
+                                    ) {
+                                        MiauCareRepository.actualizarUbicacionGpsVoluntario(p.latitude, p.longitude)
+                                    } else {
+                                        MiauCareRepository.fetchRutaVoluntario(p.latitude, p.longitude)
+                                    }
+                                }
+                            }
+                            return true
+                        }
 
-                drawRoundRect(pinkParkBlock, Offset(w * 0.04f, h * 0.72f), Size(w * 0.20f, h * 0.24f), CornerRadius(14f))
-                drawRoundRect(beigeBlock, Offset(w * 0.33f, h * 0.72f), Size(w * 0.22f, h * 0.24f), CornerRadius(14f))
+                        override fun longPressHelper(p: GeoPoint?): Boolean {
+                            return singleTapConfirmedHelper(p)
+                        }
+                    }
+                    mapView.overlays.add(MapEventsOverlay(receiver))
 
-                drawLine(roadLine, Offset(0f, h * 0.39f), Offset(w, h * 0.41f), strokeWidth = 2.5f)
-                drawLine(roadLine, Offset(0f, h * 0.69f), Offset(w, h * 0.68f), strokeWidth = 2.5f)
-                drawLine(roadLine, Offset(w * 0.53f, 0f), Offset(w * 0.53f, h), strokeWidth = 2.5f)
-            }
+                    val userGeoPoint = GeoPoint(userLat, userLon)
 
-            // Dynamic street / stop labels from GET /api/zonas/ruta
-            Text(
-                text = firstStop?.address ?: "C. del Olivo",
-                style = McLabel11Regular.copy(fontSize = 9.5.sp),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 74.dp, end = 60.dp)
-            )
-            Text(
-                text = firstStop?.name ?: "Parque Norte",
-                style = McLabel11Regular.copy(fontSize = 9.5.sp),
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 68.dp, top = 8.dp)
-            )
-            Text(
-                text = secondStop?.address ?: thirdStop?.address ?: "C. del Sol",
-                style = McLabel11Regular.copy(fontSize = 9.5.sp),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 66.dp, end = 56.dp)
-            )
+                    // Línea de ruta real entre la ubicación GPS del usuario y las colonias en Colombia
+                    val routePoints = mutableListOf(userGeoPoint)
+                    routeList.forEach { col ->
+                        val lat = col.latitud
+                        val lon = col.longitud
+                        if (lat != null && lon != null && MiauCareApiClient.isInsideColombia(lat, lon)) {
+                            routePoints.add(GeoPoint(lat, lon))
+                        }
+                    }
+                    if (routePoints.size >= 2) {
+                        val polyline = Polyline(mapView).apply {
+                            setPoints(routePoints)
+                            outlinePaint.color = android.graphics.Color.rgb(241, 120, 101)
+                            outlinePaint.strokeWidth = 7f
+                            outlinePaint.isAntiAlias = true
+                        }
+                        mapView.overlays.add(polyline)
+                    }
 
-            // "Estás aquí" indicator
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 18.dp, end = 36.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(McCoral.copy(alpha = 0.28f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(McCoral)
-                    )
+                    // Marcadores de cada colonia felina en Colombia
+                    routeList.forEachIndexed { idx, col ->
+                        val lat = col.latitud ?: (4.6097 + idx * 0.018)
+                        val lon = col.longitud ?: (-74.0817 - idx * 0.006)
+                        val colPoint = GeoPoint(lat, lon)
+                        val orderNum = col.ordenParada ?: (idx + 1)
+
+                        val marker = Marker(mapView).apply {
+                            position = colPoint
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = createColonyMarkerDrawable(context, orderNum)
+                            title = "$orderNum. ${col.name} (${col.catsCountText})"
+                            snippet = "${col.address} · Alimentación: ${col.feedingTime}"
+                            setOnMarkerClickListener { m, mv ->
+                                mv.controller.animateTo(m.position)
+                                m.showInfoWindow()
+                                onColonyPinClick()
+                                true
+                            }
+                        }
+                        mapView.overlays.add(marker)
+                    }
+
+                    // Marcador de ubicación GPS real del usuario ("Estás aquí")
+                    val userMarker = Marker(mapView).apply {
+                        position = userGeoPoint
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        icon = createUserGpsMarkerDrawable(context)
+                        title = "Estás aquí (Tu ubicación GPS)"
+                        snippet = String.format(Locale.US, "Colombia: %.4f, %.4f", userLat, userLon)
+                    }
+                    mapView.overlays.add(userMarker)
+                    mapView.invalidate()
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Estás aquí",
-                    style = McLabel11Regular.copy(fontSize = 9.sp, color = McTextPrimary)
-                )
-            }
+            )
 
-            // Top-left floating pill "3 colonias cerca"
+            // Píldora superior izquierda: Colonias y coordenadas GPS en Colombia
             Surface(
-                color = McCardWhite,
+                color = McCardWhite.copy(alpha = 0.94f),
                 shape = RoundedCornerShape(999.dp),
                 shadowElevation = 4.dp,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = 14.dp, top = 14.dp)
+                    .padding(start = 12.dp, top = 12.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
-                        tint = McTextPrimary,
+                        tint = McCoralDark,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -660,74 +843,108 @@ fun McColonyMapCard(
                         text = countText,
                         style = McLabel11Regular.copy(
                             color = McTextPrimary,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
                         )
                     )
                 }
             }
 
-            // Top-right button "Usar mi ubicación GPS" (RN-07)
-            if (onUseGpsClick != null) {
+            // Botón superior derecho: "Usar mi ubicación GPS" (RN-07) y centrar mapa en Colombia
+            Surface(
+                color = McBlack,
+                shape = RoundedCornerShape(999.dp),
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 12.dp, top = 12.dp)
+                    .clickable {
+                        MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
+                            mapViewRef?.controller?.animateTo(GeoPoint(lat, lon))
+                            mapViewRef?.controller?.setZoom(13.8)
+                        }
+                        onUseGpsClick?.invoke()
+                    }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MyLocation,
+                        contentDescription = "GPS",
+                        tint = McCoral,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Usar mi ubicación GPS",
+                        style = McLabel11Regular.copy(
+                            color = McCardWhite,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
+                        )
+                    )
+                }
+            }
+
+            // Controles de Zoom (+ / -) en la esquina inferior izquierda
+            Column(
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 12.dp, bottom = 12.dp)
+            ) {
                 Surface(
-                    color = McBlack,
-                    shape = RoundedCornerShape(999.dp),
+                    color = McCardWhite.copy(alpha = 0.94f),
+                    shape = CircleShape,
                     shadowElevation = 4.dp,
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(end = 14.dp, top = 14.dp)
-                        .clickable { onUseGpsClick() }
+                        .size(32.dp)
+                        .clickable { mapViewRef?.controller?.zoomIn() }
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MyLocation,
-                            contentDescription = "GPS",
-                            tint = McCoral,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Usar mi ubicación GPS",
-                            style = McLabel11Regular.copy(
-                                color = McCardWhite,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp
-                            )
-                        )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Acercar", tint = McTextPrimary, modifier = Modifier.size(16.dp))
+                    }
+                }
+                Surface(
+                    color = McCardWhite.copy(alpha = 0.94f),
+                    shape = CircleShape,
+                    shadowElevation = 4.dp,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clickable { mapViewRef?.controller?.zoomOut() }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(imageVector = Icons.Default.Remove, contentDescription = "Alejar", tint = McTextPrimary, modifier = Modifier.size(16.dp))
                     }
                 }
             }
 
-            // 3 Paw Print Pins
-            McPawPin(
+            // Etiqueta inferior central con coordenadas GPS activas en Colombia
+            Surface(
+                color = McCardWhite.copy(alpha = 0.92f),
+                shape = RoundedCornerShape(999.dp),
+                shadowElevation = 3.dp,
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 88.dp, top = 6.dp)
-                    .clickable { onColonyPinClick() }
-            )
-            McPawPin(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(end = 68.dp, top = 56.dp)
-                    .clickable { onColonyPinClick() }
-            )
-            McPawPin(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 100.dp, bottom = 22.dp)
-                    .clickable { onColonyPinClick() }
-            )
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+            ) {
+                Text(
+                    text = String.format(Locale.US, "GPS Colombia: %.4f, %.4f", userLat, userLon),
+                    style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 9.5.sp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
 
-            // Bottom-right Coral '+' FAB
+            // Botón flotante '+' para reportar gato no censado
             Surface(
                 color = McCoral,
                 shape = CircleShape,
                 shadowElevation = 6.dp,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 16.dp)
+                    .padding(end = 14.dp, bottom = 14.dp)
                     .size(44.dp)
                     .clickable { onAddClick() }
             ) {
@@ -742,7 +959,7 @@ fun McColonyMapCard(
             }
         }
 
-        // Route stops summary strip from GET /api/zonas/ruta
+        // Tarjetas interactivas de paradas de la ruta (al tocar una colonia, el mapa de Colombia se mueve a ella)
         if (routeList.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(
@@ -753,7 +970,17 @@ fun McColonyMapCard(
                     Surface(
                         color = McCardWhite,
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                val lat = stop.latitud
+                                val lon = stop.longitud
+                                if (lat != null && lon != null) {
+                                    mapViewRef?.controller?.animateTo(GeoPoint(lat, lon))
+                                    mapViewRef?.controller?.setZoom(15.0)
+                                }
+                                onColonyPinClick()
+                            }
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
                             Text(
@@ -1047,97 +1274,8 @@ fun McFloatingToastHost() {
 
 @Composable
 fun McServerConnectionChip(
-    context: android.content.Context
+    @Suppress("UNUSED_PARAMETER") context: android.content.Context
 ) {
-    var showServerDialog by remember { mutableStateOf(false) }
-    var currentUrl by remember { mutableStateOf(MiauCareApiClient.baseUrl) }
-
-    Surface(
-        color = McCardWhite.copy(alpha = 0.85f),
-        shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, McBorder),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { showServerDialog = true }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF28A745))
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "API: ${MiauCareApiClient.baseUrl}",
-                    style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp)
-                )
-            }
-            Text(
-                text = "Cambiar",
-                style = McLabel11Regular.copy(color = McCoralDark, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
-            )
-        }
-    }
-
-    if (showServerDialog) {
-        Dialog(onDismissRequest = { showServerDialog = false }) {
-            Surface(
-                color = McCardWhite,
-                shape = RoundedCornerShape(26.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(text = "Servidor Backend MiauCare (Render)", style = McTitle18)
-                    Text(
-                        text = "Conectado directamente a Render Cloud (https://miaucare.onrender.com).",
-                        style = McLabel11Regular
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    listOf(
-                        "Render Cloud (Producción)" to MiauCareApiClient.RENDER_CLOUD_URL
-                    ).forEach { (label, url) ->
-                        Surface(
-                            color = if (currentUrl == url) McCoralSoft else McBackground,
-                            shape = RoundedCornerShape(14.dp),
-                            border = if (currentUrl == url) BorderStroke(1.dp, McCoralBorder) else null,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 8.dp)
-                                .clickable { currentUrl = url }
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(text = label, style = McBody14Bold)
-                                Text(text = url, style = McLabel11Regular)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-                    McInputField(
-                        label = "URL / IP Local personalizada",
-                        value = currentUrl,
-                        onValueChange = { currentUrl = it },
-                        placeholder = "http://192.168.1.10:8080"
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    McCoralButton(
-                        text = "Guardar servidor",
-                        onClick = {
-                            MiauCareRepository.saveBaseUrl(context, currentUrl)
-                            showServerDialog = false
-                            MiauCareRepository.showToast("Servidor: ${MiauCareApiClient.baseUrl}")
-                        }
-                    )
-                }
-            }
-        }
-    }
+    // Conexión transparente y automática al servidor en producción sin mostrar etiquetas técnicas en la interfaz
 }
 

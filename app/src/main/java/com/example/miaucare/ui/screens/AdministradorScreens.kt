@@ -70,17 +70,6 @@ fun AdminHomeScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 12.dp, bottom = 110.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            McServerConnectionChip(context = context)
-            IconButton(onClick = { scope.launch { MiauCareRepository.fetchAdminDashboardData() } }) {
-                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Actualizar", tint = McTextPrimary)
-            }
-        }
-        Spacer(modifier = Modifier.height(6.dp))
         McRolePrototypeSwitcher(
             onRoleSelected = onRoleSwitch,
             onOpenAdminTools = { showToolsModal = true }
@@ -2111,6 +2100,14 @@ fun AdminColoniesScreen(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Mapa interactivo real de las colonias de Colombia
+        McColonyMapCard(
+            onAddClick = { showAddColonyModal = true },
+            onColonyPinClick = {}
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 

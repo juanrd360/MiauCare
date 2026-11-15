@@ -390,17 +390,6 @@ fun VetDashboardScreen(
             .padding(horizontal = 20.dp)
             .padding(top = 12.dp, bottom = 110.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            McServerConnectionChip(context = context)
-            IconButton(onClick = { scope.launch { MiauCareRepository.fetchVetDashboardData() } }) {
-                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Actualizar", tint = McTextPrimary)
-            }
-        }
-        Spacer(modifier = Modifier.height(6.dp))
         McRolePrototypeSwitcher(onRoleSelected = onRoleSwitch)
         Spacer(modifier = Modifier.height(14.dp))
 
