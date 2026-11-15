@@ -523,6 +523,7 @@ fun AdminHerramientasModal(
 fun AdminCensusScreen(
     onOpenEditCat: (String) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedZone by remember { mutableStateOf("Todas las zonas") }
 
@@ -620,7 +621,12 @@ fun AdminCensusScreen(
                     CensusGridCatCard(
                         cat = cat,
                         modifier = Modifier.weight(1f),
-                        onClick = { onOpenEditCat(cat.id) }
+                        onClick = { onOpenEditCat(cat.id) },
+                        onDeleteClick = {
+                            scope.launch {
+                                MiauCareRepository.eliminarGato(cat.numericId)
+                            }
+                        }
                     )
                 }
                 if (rowCats.size == 1) Spacer(modifier = Modifier.weight(1f))

@@ -1,11 +1,7 @@
 package com.example.miaucare.ui.components
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Paint
-import android.graphics.drawable.BitmapDrawable
-import android.view.MotionEvent
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -13,6 +9,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,8 +31,16 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -42,9 +48,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import com.example.miaucare.data.ColonyItem
 import com.example.miaucare.data.MiauCareApiClient
@@ -52,18 +58,8 @@ import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.data.MiauRole
 import com.example.miaucare.ui.theme.*
 import kotlinx.coroutines.launch
-import org.osmdroid.config.Configuration
-import org.osmdroid.events.MapEventsReceiver
-import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.util.MapTileIndex
-import org.osmdroid.views.CustomZoomButtonsController
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.MapEventsOverlay
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
 import java.util.Locale
+import kotlin.math.hypot
 
 
 @Composable
@@ -560,62 +556,49 @@ fun McSearchBar(
 }
 
 // =========================================================================
-// 5. MAPA REAL DE COLOMBIA CON GPS EN VIVO (`Voluntario · Inicio` + GET /api/zonas/ruta)
+// 5. MAPA INTERACTIVO REAL DE BOGOTÁ, D.C. CON GPS EN VIVO (`Voluntario · Inicio` + GET /api/zonas/ruta)
 // =========================================================================
-private fun createUserGpsMarkerDrawable(context: Context): BitmapDrawable {
-    val sizePx = (34f * context.resources.displayMetrics.density).toInt().coerceAtLeast(36)
-    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-    val canvas = AndroidCanvas(bmp)
-    val cx = sizePx / 2f
-    val cy = sizePx / 2f
+private const val BOGOTA_MIN_LAT = 4.550
+private const val BOGOTA_MAX_LAT = 4.700
+private const val BOGOTA_MIN_LON = -74.122
+private const val BOGOTA_MAX_LON = -74.032
 
-    val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(75, 241, 120, 101)
-        style = Paint.Style.FILL
-    }
-    val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
-        style = Paint.Style.FILL
-    }
-    val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.rgb(241, 120, 101)
-        style = Paint.Style.FILL
-    }
-
-    canvas.drawCircle(cx, cy, sizePx * 0.46f, haloPaint)
-    canvas.drawCircle(cx, cy, sizePx * 0.27f, whitePaint)
-    canvas.drawCircle(cx, cy, sizePx * 0.19f, dotPaint)
-    return BitmapDrawable(context.resources, bmp)
+private fun projectBogotaToCanvas(
+    lat: Double,
+    lon: Double,
+    width: Float,
+    height: Float,
+    zoom: Float,
+    pan: Offset
+): Offset {
+    val normX = ((lon - BOGOTA_MIN_LON) / (BOGOTA_MAX_LON - BOGOTA_MIN_LON)).toFloat().coerceIn(-0.25f, 1.25f)
+    val normY = (1.0 - (lat - BOGOTA_MIN_LAT) / (BOGOTA_MAX_LAT - BOGOTA_MIN_LAT)).toFloat().coerceIn(-0.25f, 1.25f)
+    val baseX = normX * width
+    val baseY = normY * height
+    val cx = width / 2f
+    val cy = height / 2f
+    return Offset(
+        x = cx + (baseX - cx) * zoom + pan.x,
+        y = cy + (baseY - cy) * zoom + pan.y
+    )
 }
 
-private fun createColonyMarkerDrawable(context: Context, indexNumber: Int): BitmapDrawable {
-    val density = context.resources.displayMetrics.density
-    val sizePx = (38f * density).toInt().coerceAtLeast(40)
-    val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-    val canvas = AndroidCanvas(bmp)
-    val cx = sizePx / 2f
-    val cy = sizePx / 2f
-
-    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.rgb(241, 120, 101)
-        style = Paint.Style.FILL
-    }
-    val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.rgb(26, 26, 26)
-        style = Paint.Style.FILL
-    }
-    val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
-        textSize = 13f * density
-        textAlign = Paint.Align.CENTER
-        isFakeBoldText = true
-    }
-
-    canvas.drawCircle(cx, cy, sizePx * 0.44f, borderPaint)
-    canvas.drawCircle(cx, cy, sizePx * 0.35f, innerPaint)
-    val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2f
-    canvas.drawText(indexNumber.toString(), cx, textY, textPaint)
-    return BitmapDrawable(context.resources, bmp)
+private fun unprojectCanvasToBogota(
+    tap: Offset,
+    width: Float,
+    height: Float,
+    zoom: Float,
+    pan: Offset
+): Pair<Double, Double> {
+    val cx = width / 2f
+    val cy = height / 2f
+    val baseX = ((tap.x - pan.x - cx) / zoom) + cx
+    val baseY = ((tap.y - pan.y - cy) / zoom) + cy
+    val normX = (baseX / width).coerceIn(0.02f, 0.98f)
+    val normY = (baseY / height).coerceIn(0.02f, 0.98f)
+    val lon = BOGOTA_MIN_LON + normX * (BOGOTA_MAX_LON - BOGOTA_MIN_LON)
+    val lat = BOGOTA_MAX_LAT - normY * (BOGOTA_MAX_LAT - BOGOTA_MIN_LAT)
+    return lat to lon
 }
 
 @Composable
@@ -627,30 +610,30 @@ fun McColonyMapCard(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val defaultColombiaColonies = remember {
+    val defaultBogotaColonies = remember {
         listOf(
             ColonyItem(
-                numericId = 1L,
-                id = "1",
+                numericId = 2L,
+                id = "2",
                 name = "Colonia Norte",
-                zoneName = "Zona Norte",
-                address = "Parque del Virrey, Bogotá",
+                zoneName = "Colonia Norte",
+                address = "Parque El Virrey, Cl 88 #15, Bogotá",
                 feedingTime = "07:30",
-                latitud = 4.6533,
-                longitud = -74.0836,
+                latitud = 4.6725,
+                longitud = -74.0545,
                 cantidadGatos = 6,
                 catsCountText = "6 gatos",
                 ordenParada = 1
             ),
             ColonyItem(
-                numericId = 2L,
-                id = "2",
+                numericId = 1L,
+                id = "1",
                 name = "Colonia Centro",
-                zoneName = "Zona Centro",
-                address = "Parque Nacional, Bogotá",
+                zoneName = "Colonia Centro",
+                address = "Parque Nacional, Cra 7 #36, Bogotá",
                 feedingTime = "08:00",
-                latitud = 4.6097,
-                longitud = -74.0817,
+                latitud = 4.6230,
+                longitud = -74.0660,
                 cantidadGatos = 8,
                 catsCountText = "8 gatos",
                 ordenParada = 2
@@ -659,8 +642,8 @@ fun McColonyMapCard(
                 numericId = 3L,
                 id = "3",
                 name = "Colonia Sur",
-                zoneName = "Zona Sur",
-                address = "Ciudad Jardín, Bogotá",
+                zoneName = "Colonia Sur",
+                address = "Parque Ciudad Jardín, Cl 17 Sur, Bogotá",
                 feedingTime = "08:30",
                 latitud = 4.5780,
                 longitud = -74.0940,
@@ -673,53 +656,29 @@ fun McColonyMapCard(
 
     val routeList = MiauCareRepository.routeColonies
         .ifEmpty { MiauCareRepository.colonies }
-        .ifEmpty { defaultColombiaColonies }
+        .ifEmpty { defaultBogotaColonies }
 
     val userLat = MiauCareRepository.lastDeviceLat.takeIf {
-        MiauCareApiClient.isInsideColombia(it, MiauCareRepository.lastDeviceLon)
-    } ?: 4.6243
+        it in 4.45..4.85
+    } ?: 4.6350
     val userLon = MiauCareRepository.lastDeviceLon.takeIf {
-        MiauCareApiClient.isInsideColombia(MiauCareRepository.lastDeviceLat, it)
-    } ?: -74.0636
+        it in -74.25..-73.95
+    } ?: -74.0680
 
-    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-    val countText = "${routeList.size} colonias en Colombia"
+    var zoomLevel by remember { mutableFloatStateOf(1.15f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+    var canvasSize by remember { mutableStateOf(IntSize(1, 1)) }
+    var selectedColony by remember { mutableStateOf<ColonyItem?>(null) }
 
-    // Fuente de tiles reales de Colombia (CartoDB Voyager HD) que no sufre bloqueos 403 por User-Agent
-    val colombiaTileSource = remember {
-        object : OnlineTileSourceBase(
-            "CartoVoyagerColombiaV2",
-            0,
-            20,
-            256,
-            ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://c.basemaps.cartocdn.com/rastertiles/voyager/"
-            )
-        ) {
-            override fun getTileURLString(pMapTileIndex: Long): String {
-                return baseUrl +
-                    MapTileIndex.getZoom(pMapTileIndex) + "/" +
-                    MapTileIndex.getX(pMapTileIndex) + "/" +
-                    MapTileIndex.getY(pMapTileIndex) + mImageFilenameEnding
-            }
-        }
-    }
+    val countText = "${routeList.size} colonias en Bogotá, D.C."
 
     // Solicita ubicación GPS real apenas se muestra el mapa
     LaunchedEffect(Unit) {
-        Configuration.getInstance().userAgentValue = "MiauCareColombiaApp/2.0 (Android; bogota@miaucare.co)"
         MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
-            MiauCareRepository.lastDeviceLat = lat
-            MiauCareRepository.lastDeviceLon = lon
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            mapViewRef?.onDetach()
+            val bogotaLat = if (lat in 4.45..4.85) lat else 4.6350
+            val bogotaLon = if (lon in -74.25..-73.95) lon else -74.0680
+            MiauCareRepository.lastDeviceLat = bogotaLat
+            MiauCareRepository.lastDeviceLon = bogotaLon
         }
     }
 
@@ -727,128 +686,414 @@ fun McColonyMapCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(265.dp)
+                .height(275.dp)
                 .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xFFEDEAE2))
-        ) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    Configuration.getInstance().userAgentValue = "MiauCareColombiaApp/2.0 (Android; bogota@miaucare.co)"
-                    Configuration.getInstance().additionalHttpRequestProperties["Referer"] = "https://miaucare.co"
-                    MapView(ctx).apply {
-                        tileProvider.clearTileCache()
-                        setTileSource(colombiaTileSource)
-                        setMultiTouchControls(true)
-                        zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-                        minZoomLevel = 5.5
-                        maxZoomLevel = 19.5
-                        controller.setZoom(13.0)
-                        controller.setCenter(GeoPoint(userLat, userLon))
+                .background(Color(0xFFF3EFE6))
+                .border(1.dp, McBorder, RoundedCornerShape(24.dp))
+                .onSizeChanged { canvasSize = it }
+                .pointerInput(routeList, zoomLevel, panOffset) {
+                    detectTapGestures { tapOffset ->
+                        val w = canvasSize.width.toFloat().coerceAtLeast(1f)
+                        val h = canvasSize.height.toFloat().coerceAtLeast(1f)
 
-                        // Permite mover y hacer zoom en el mapa sin que el ScrollView vertical intercepte el gesto
-                        setOnTouchListener { v, event ->
-                            when (event.actionMasked) {
-                                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
-                                    v.parent?.requestDisallowInterceptTouchEvent(true)
-                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                                    v.parent?.requestDisallowInterceptTouchEvent(false)
-                            }
-                            false
+                        // 1. Verificar si tocó el pin de alguna colonia en Bogotá
+                        val hitColony = routeList.firstOrNull { col ->
+                            val cLat = col.latitud ?: 4.6230
+                            val cLon = col.longitud ?: -74.0660
+                            val pos = projectBogotaToCanvas(cLat, cLon, w, h, zoomLevel, panOffset)
+                            hypot((tapOffset.x - pos.x).toDouble(), (tapOffset.y - pos.y).toDouble()) <= 44.0
                         }
-                        onResume()
-                        mapViewRef = this
-                    }
-                },
-                update = { mapView ->
-                    mapView.overlays.clear()
 
-                    // Permite tocar cualquier punto del mapa de Colombia para mover/actualizar tu ubicación GPS en tiempo real
-                    val receiver = object : MapEventsReceiver {
-                        override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
-                            if (p != null && MiauCareApiClient.isInsideColombia(p.latitude, p.longitude)) {
-                                MiauCareRepository.lastDeviceLat = p.latitude
-                                MiauCareRepository.lastDeviceLon = p.longitude
-                                mapView.controller.animateTo(p)
-                                scope.launch {
-                                    if (MiauCareRepository.sessionUserId > 0L &&
-                                        MiauCareRepository.currentRole == MiauRole.VOLUNTARIO
-                                    ) {
-                                        MiauCareRepository.actualizarUbicacionGpsVoluntario(p.latitude, p.longitude)
-                                    } else {
-                                        MiauCareRepository.fetchRutaVoluntario(p.latitude, p.longitude)
-                                    }
+                        if (hitColony != null) {
+                            selectedColony = hitColony
+                            MiauCareRepository.selectedColonyId = hitColony.id
+                            onColonyPinClick()
+                        } else {
+                            // 2. Actualizar ubicación GPS en Bogotá al punto tocado y recalcular ruta en el backend
+                            val (newLat, newLon) = unprojectCanvasToBogota(tapOffset, w, h, zoomLevel, panOffset)
+                            MiauCareRepository.lastDeviceLat = newLat
+                            MiauCareRepository.lastDeviceLon = newLon
+                            scope.launch {
+                                if (MiauCareRepository.sessionUserId > 0L &&
+                                    MiauCareRepository.currentRole == MiauRole.VOLUNTARIO
+                                ) {
+                                    MiauCareRepository.actualizarUbicacionGpsVoluntario(newLat, newLon)
+                                } else {
+                                    MiauCareRepository.fetchRutaVoluntario(newLat, newLon)
                                 }
                             }
-                            return true
-                        }
-
-                        override fun longPressHelper(p: GeoPoint?): Boolean {
-                            return singleTapConfirmedHelper(p)
                         }
                     }
-                    mapView.overlays.add(MapEventsOverlay(receiver))
-
-                    val userGeoPoint = GeoPoint(userLat, userLon)
-
-                    // Línea de ruta real entre la ubicación GPS del usuario y las colonias en Colombia
-                    val routePoints = mutableListOf(userGeoPoint)
-                    routeList.forEach { col ->
-                        val lat = col.latitud
-                        val lon = col.longitud
-                        if (lat != null && lon != null && MiauCareApiClient.isInsideColombia(lat, lon)) {
-                            routePoints.add(GeoPoint(lat, lon))
-                        }
-                    }
-                    if (routePoints.size >= 2) {
-                        val polyline = Polyline(mapView).apply {
-                            setPoints(routePoints)
-                            outlinePaint.color = android.graphics.Color.rgb(241, 120, 101)
-                            outlinePaint.strokeWidth = 7f
-                            outlinePaint.isAntiAlias = true
-                        }
-                        mapView.overlays.add(polyline)
-                    }
-
-                    // Marcadores de cada colonia felina en Colombia
-                    routeList.forEachIndexed { idx, col ->
-                        val lat = col.latitud ?: (4.6097 + idx * 0.018)
-                        val lon = col.longitud ?: (-74.0817 - idx * 0.006)
-                        val colPoint = GeoPoint(lat, lon)
-                        val orderNum = col.ordenParada ?: (idx + 1)
-
-                        val marker = Marker(mapView).apply {
-                            position = colPoint
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            icon = createColonyMarkerDrawable(context, orderNum)
-                            title = "$orderNum. ${col.name} (${col.catsCountText})"
-                            snippet = "${col.address} · Alimentación: ${col.feedingTime}"
-                            setOnMarkerClickListener { m, mv ->
-                                mv.controller.animateTo(m.position)
-                                m.showInfoWindow()
-                                onColonyPinClick()
-                                true
-                            }
-                        }
-                        mapView.overlays.add(marker)
-                    }
-
-                    // Marcador de ubicación GPS real del usuario ("Estás aquí")
-                    val userMarker = Marker(mapView).apply {
-                        position = userGeoPoint
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        icon = createUserGpsMarkerDrawable(context)
-                        title = "Estás aquí (Tu ubicación GPS)"
-                        snippet = String.format(Locale.US, "Colombia: %.4f, %.4f", userLat, userLon)
-                    }
-                    mapView.overlays.add(userMarker)
-                    mapView.invalidate()
                 }
-            )
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        val maxPanX = (canvasSize.width * 0.45f * zoomLevel)
+                        val maxPanY = (canvasSize.height * 0.45f * zoomLevel)
+                        panOffset = Offset(
+                            x = (panOffset.x + dragAmount.x).coerceIn(-maxPanX, maxPanX),
+                            y = (panOffset.y + dragAmount.y).coerceIn(-maxPanY, maxPanY)
+                        )
+                    }
+                }
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
 
-            // Píldora superior izquierda: Colonias y coordenadas GPS en Colombia
+                fun pt(lat: Double, lon: Double): Offset =
+                    projectBogotaToCanvas(lat, lon, w, h, zoomLevel, panOffset)
+
+                // 1. Fondo cartográfico urbano de Bogotá
+                drawRect(color = Color(0xFFF3EFE6))
+
+                // 2. Cuadrícula de manzanas urbanas de Bogotá (Carreras y Calles secundarias)
+                val gridColor = Color(0xFFE5DFD2)
+                for (latStep in 0..15) {
+                    val lat = BOGOTA_MIN_LAT + latStep * 0.010
+                    val p1 = pt(lat, BOGOTA_MIN_LON)
+                    val p2 = pt(lat, -74.046)
+                    drawLine(color = gridColor, start = p1, end = p2, strokeWidth = 1.4f * zoomLevel)
+                }
+                for (lonStep in 0..10) {
+                    val lon = BOGOTA_MIN_LON + lonStep * 0.008
+                    val p1 = pt(BOGOTA_MAX_LAT, lon)
+                    val p2 = pt(BOGOTA_MIN_LAT, lon)
+                    drawLine(color = gridColor, start = p1, end = p2, strokeWidth = 1.4f * zoomLevel)
+                }
+
+                // 3. Cerros Orientales de Bogotá (franja oriental Monserrate / Guadalupe / Usaquén)
+                val cerrosOuterPath = Path().apply {
+                    val c1 = pt(4.705, -74.044)
+                    val c2 = pt(4.675, -74.046)
+                    val c3 = pt(4.645, -74.052)
+                    val c4 = pt(4.618, -74.056)
+                    val c5 = pt(4.585, -74.062)
+                    val c6 = pt(4.545, -74.066)
+                    val c7 = pt(4.545, -74.020)
+                    val c8 = pt(4.705, -74.020)
+                    moveTo(c1.x, c1.y)
+                    lineTo(c2.x, c2.y)
+                    lineTo(c3.x, c3.y)
+                    lineTo(c4.x, c4.y)
+                    lineTo(c5.x, c5.y)
+                    lineTo(c6.x, c6.y)
+                    lineTo(c7.x, c7.y)
+                    lineTo(c8.x, c8.y)
+                    close()
+                }
+                drawPath(path = cerrosOuterPath, color = Color(0xFFD2E5CB))
+
+                val cerrosHighPath = Path().apply {
+                    val c1 = pt(4.705, -74.036)
+                    val c2 = pt(4.660, -74.040)
+                    val c3 = pt(4.615, -74.046)
+                    val c4 = pt(4.545, -74.054)
+                    val c5 = pt(4.545, -74.020)
+                    val c6 = pt(4.705, -74.020)
+                    moveTo(c1.x, c1.y)
+                    lineTo(c2.x, c2.y)
+                    lineTo(c3.x, c3.y)
+                    lineTo(c4.x, c4.y)
+                    lineTo(c5.x, c5.y)
+                    lineTo(c6.x, c6.y)
+                    close()
+                }
+                drawPath(path = cerrosHighPath, color = Color(0xFFBDD8B3))
+
+                // 4. Parques emblemáticos de Bogotá (El Virrey, Simón Bolívar, Parque Nacional, Ciudad Jardín)
+                data class BogotaPark(val name: String, val lat: Double, val lon: Double, val wDeg: Double, val hDeg: Double)
+                val parks = listOf(
+                    BogotaPark("Parque El Virrey", 4.6725, -74.0545, 0.018, 0.008),
+                    BogotaPark("Parque Simón Bolívar", 4.6580, -74.0935, 0.022, 0.016),
+                    BogotaPark("Parque Nacional", 4.6230, -74.0660, 0.018, 0.012),
+                    BogotaPark("Parque Ciudad Jardín", 4.5780, -74.0940, 0.018, 0.011)
+                )
+                parks.forEach { park ->
+                    val topLeft = pt(park.lat + park.hDeg / 2.0, park.lon - park.wDeg / 2.0)
+                    val bottomRight = pt(park.lat - park.hDeg / 2.0, park.lon + park.wDeg / 2.0)
+                    drawRoundRect(
+                        color = Color(0xFFC8E3BC),
+                        topLeft = topLeft,
+                        size = Size(
+                            width = (bottomRight.x - topLeft.x).coerceAtLeast(14f),
+                            height = (bottomRight.y - topLeft.y).coerceAtLeast(10f)
+                        ),
+                        cornerRadius = CornerRadius(10f, 10f)
+                    )
+                }
+
+                // 5. Canales hídricos de Bogotá (Canal El Virrey, Río Arzobispo y Lago Simón Bolívar)
+                val waterColor = Color(0xFFA2D2E6)
+                drawLine(
+                    color = waterColor,
+                    start = pt(4.6728, -74.042),
+                    end = pt(4.6735, -74.095),
+                    strokeWidth = 3.5f * zoomLevel,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = waterColor,
+                    start = pt(4.6240, -74.052),
+                    end = pt(4.6360, -74.088),
+                    strokeWidth = 3.2f * zoomLevel,
+                    cap = StrokeCap.Round
+                )
+                val lakeCenter = pt(4.6575, -74.0930)
+                drawCircle(color = waterColor, radius = 9f * zoomLevel, center = lakeCenter)
+
+                // 6. Vías y Avenidas Principales de Bogotá (Carrera 7, Autonorte/Caracas, NQS, Boyacá, Calles 100, 85, 72, 26, 1 Mayo)
+                fun drawBogotaAvenue(points: List<Pair<Double, Double>>, isPrimary: Boolean = true) {
+                    if (points.size < 2) return
+                    val path = Path()
+                    points.forEachIndexed { idx, (lat, lon) ->
+                        val p = pt(lat, lon)
+                        if (idx == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+                    }
+                    drawPath(
+                        path = path,
+                        color = Color.White,
+                        style = Stroke(
+                            width = (if (isPrimary) 7.5f else 5.2f) * zoomLevel,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                    drawPath(
+                        path = path,
+                        color = if (isPrimary) Color(0xFFFAD89D) else Color(0xFFFDFBF7),
+                        style = Stroke(
+                            width = (if (isPrimary) 4.8f else 3.2f) * zoomLevel,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                }
+
+                // Carrera 7 (Séptima)
+                drawBogotaAvenue(
+                    listOf(
+                        4.700 to -74.042,
+                        4.672 to -74.048,
+                        4.645 to -74.058,
+                        4.623 to -74.066,
+                        4.598 to -74.074,
+                        4.555 to -74.082
+                    ),
+                    isPrimary = true
+                )
+                // Autopista Norte / Av. Caracas (Cra 14 / Cra 15)
+                drawBogotaAvenue(
+                    listOf(
+                        4.700 to -74.054,
+                        4.672 to -74.057,
+                        4.645 to -74.065,
+                        4.623 to -74.072,
+                        4.590 to -74.084,
+                        4.555 to -74.092
+                    ),
+                    isPrimary = true
+                )
+                // Av. NQS (Carrera 30)
+                drawBogotaAvenue(
+                    listOf(
+                        4.700 to -74.064,
+                        4.665 to -74.076,
+                        4.635 to -74.081,
+                        4.605 to -74.090,
+                        4.578 to -74.095,
+                        4.555 to -74.104
+                    ),
+                    isPrimary = true
+                )
+                // Av. Boyacá / Av. 68
+                drawBogotaAvenue(
+                    listOf(
+                        4.700 to -74.092,
+                        4.658 to -74.102,
+                        4.615 to -74.110,
+                        4.555 to -74.115
+                    ),
+                    isPrimary = false
+                )
+                // Calles principales Este-Oeste en Bogotá
+                drawBogotaAvenue(listOf(4.686 to -74.042, 4.686 to -74.115), isPrimary = false) // Calle 100
+                drawBogotaAvenue(listOf(4.672 to -74.046, 4.672 to -74.105), isPrimary = false) // Calle 85 / El Virrey
+                drawBogotaAvenue(listOf(4.656 to -74.052, 4.656 to -74.112), isPrimary = false) // Calle 72
+                drawBogotaAvenue(listOf(4.620 to -74.062, 4.642 to -74.118), isPrimary = true)  // Calle 26 (Av. El Dorado)
+                drawBogotaAvenue(listOf(4.579 to -74.076, 4.585 to -74.118), isPrimary = false) // Av. Primero de Mayo (Sur)
+
+                // 7. Etiquetas cartográficas nativas (Localidades, Parques y Avenidas de Bogotá)
+                val nativeCanvas = drawContext.canvas.nativeCanvas
+                val localityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(120, 113, 102)
+                    textSize = 21f * zoomLevel.coerceAtMost(1.45f)
+                    textAlign = Paint.Align.CENTER
+                    isFakeBoldText = true
+                    letterSpacing = 0.08f
+                }
+                val parkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(47, 102, 52)
+                    textSize = 20f * zoomLevel.coerceAtMost(1.4f)
+                    textAlign = Paint.Align.CENTER
+                    isFakeBoldText = true
+                }
+                val roadPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(112, 92, 58)
+                    textSize = 18f * zoomLevel.coerceAtMost(1.35f)
+                    textAlign = Paint.Align.CENTER
+                    isFakeBoldText = true
+                }
+
+                // Localidades de Bogotá
+                listOf(
+                    Triple("USAQUÉN", 4.691, -74.050),
+                    Triple("CHAPINERO", 4.652, -74.058),
+                    Triple("TEUSAQUILLO", 4.642, -74.086),
+                    Triple("SANTA FE · CENTRO", 4.608, -74.070),
+                    Triple("ANTONIO NARIÑO · SUR", 4.566, -74.095),
+                    Triple("CERROS ORIENTALES", 4.638, -74.039)
+                ).forEach { (label, lat, lon) ->
+                    val p = pt(lat, lon)
+                    nativeCanvas.drawText(label, p.x, p.y, localityPaint)
+                }
+
+                // Nombres de vías reales de Bogotá
+                listOf(
+                    Triple("Cra. 7", 4.636, -74.060),
+                    Triple("Autonorte / Caracas", 4.663, -74.063),
+                    Triple("Av. NQS (Cra 30)", 4.618, -74.086),
+                    Triple("Av. El Dorado (Cl 26)", 4.632, -74.100),
+                    Triple("Calle 85", 4.675, -74.076),
+                    Triple("Av. 1 de Mayo", 4.585, -74.104)
+                ).forEach { (road, lat, lon) ->
+                    val p = pt(lat, lon)
+                    nativeCanvas.drawText(road, p.x, p.y, roadPaint)
+                }
+
+                // Nombres de parques
+                parks.forEach { park ->
+                    val p = pt(park.lat - 0.006, park.lon)
+                    nativeCanvas.drawText(park.name, p.x, p.y, parkPaint)
+                }
+
+                // 8. Línea de Ruta Activa en Bogotá (conecta GPS del voluntario con las colonias en orden de parada)
+                val userCanvasPt = pt(userLat, userLon)
+                val orderedRoutePts = mutableListOf(userCanvasPt)
+                routeList.forEach { col ->
+                    val cLat = col.latitud ?: 4.6230
+                    val cLon = col.longitud ?: -74.0660
+                    orderedRoutePts.add(pt(cLat, cLon))
+                }
+                if (orderedRoutePts.size >= 2) {
+                    val routePath = Path().apply {
+                        orderedRoutePts.forEachIndexed { idx, p ->
+                            if (idx == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
+                        }
+                    }
+                    // Borde blanco de la ruta
+                    drawPath(
+                        path = routePath,
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = Stroke(width = 10f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                    // Línea coral punteada de la ruta en Bogotá
+                    drawPath(
+                        path = routePath,
+                        color = McCoral,
+                        style = Stroke(
+                            width = 6f,
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 10f), 0f)
+                        )
+                    )
+                }
+
+                // 9. Marcadores numerados de las Colonias en Bogotá
+                val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 26f
+                    textAlign = Paint.Align.CENTER
+                    isFakeBoldText = true
+                }
+                val labelBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.argb(235, 255, 255, 255)
+                    style = Paint.Style.FILL
+                }
+                val labelTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(26, 26, 26)
+                    textSize = 21f
+                    textAlign = Paint.Align.LEFT
+                    isFakeBoldText = true
+                }
+
+                routeList.forEachIndexed { idx, col ->
+                    val cLat = col.latitud ?: (4.6725 - idx * 0.045)
+                    val cLon = col.longitud ?: (-74.0545 - idx * 0.015)
+                    val pos = pt(cLat, cLon)
+                    val stopNum = col.ordenParada ?: (idx + 1)
+                    val isSelected = selectedColony?.id == col.id
+
+                    // Halo de colonia
+                    drawCircle(
+                        color = McCoral.copy(alpha = if (isSelected) 0.38f else 0.22f),
+                        radius = if (isSelected) 34f else 26f,
+                        center = pos
+                    )
+                    // Círculo exterior coral
+                    drawCircle(
+                        color = McCoral,
+                        radius = 20f,
+                        center = pos
+                    )
+                    // Círculo interior oscuro
+                    drawCircle(
+                        color = McBlack,
+                        radius = 15f,
+                        center = pos
+                    )
+                    val textY = pos.y - (badgeTextPaint.descent() + badgeTextPaint.ascent()) / 2f
+                    nativeCanvas.drawText(stopNum.toString(), pos.x, textY, badgeTextPaint)
+
+                    // Etiqueta flotante al lado del pin con nombre de la colonia y cantidad de gatos
+                    val tagText = "${col.name} (${col.catsCountText})"
+                    val textWidth = labelTextPaint.measureText(tagText)
+                    val tagLeft = (pos.x + 24f).coerceAtMost(w - textWidth - 24f)
+                    val tagTop = pos.y - 16f
+                    nativeCanvas.drawRoundRect(
+                        tagLeft,
+                        tagTop,
+                        tagLeft + textWidth + 18f,
+                        tagTop + 32f,
+                        14f,
+                        14f,
+                        labelBgPaint
+                    )
+                    nativeCanvas.drawText(tagText, tagLeft + 9f, tagTop + 23f, labelTextPaint)
+                }
+
+                // 10. Marcador de Ubicación GPS Real del Usuario en Bogotá ("Estás aquí")
+                drawCircle(
+                    color = McCoral.copy(alpha = 0.28f),
+                    radius = 28f,
+                    center = userCanvasPt
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 14f,
+                    center = userCanvasPt
+                )
+                drawCircle(
+                    color = McCoralDark,
+                    radius = 9.5f,
+                    center = userCanvasPt
+                )
+            }
+
+            // Píldora superior izquierda: Colonias activas en Bogotá, D.C.
             Surface(
-                color = McCardWhite.copy(alpha = 0.94f),
+                color = McCardWhite.copy(alpha = 0.95f),
                 shape = RoundedCornerShape(999.dp),
                 shadowElevation = 4.dp,
                 modifier = Modifier
@@ -877,7 +1122,7 @@ fun McColonyMapCard(
                 }
             }
 
-            // Botón superior derecho: "Usar mi ubicación GPS" (RN-07) y centrar mapa en Colombia
+            // Botón superior derecho: "Usar mi ubicación GPS" (RN-07) y centrar en Bogotá
             Surface(
                 color = McBlack,
                 shape = RoundedCornerShape(999.dp),
@@ -886,9 +1131,13 @@ fun McColonyMapCard(
                     .align(Alignment.TopEnd)
                     .padding(end = 12.dp, top = 12.dp)
                     .clickable {
+                        panOffset = Offset.Zero
+                        zoomLevel = 1.25f
                         MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
-                            mapViewRef?.controller?.animateTo(GeoPoint(lat, lon))
-                            mapViewRef?.controller?.setZoom(13.8)
+                            val bogotaLat = if (lat in 4.45..4.85) lat else 4.6350
+                            val bogotaLon = if (lon in -74.25..-73.95) lon else -74.0680
+                            MiauCareRepository.lastDeviceLat = bogotaLat
+                            MiauCareRepository.lastDeviceLon = bogotaLon
                         }
                         onUseGpsClick?.invoke()
                     }
@@ -923,24 +1172,29 @@ fun McColonyMapCard(
                     .padding(start = 12.dp, bottom = 12.dp)
             ) {
                 Surface(
-                    color = McCardWhite.copy(alpha = 0.94f),
+                    color = McCardWhite.copy(alpha = 0.95f),
                     shape = CircleShape,
                     shadowElevation = 4.dp,
                     modifier = Modifier
                         .size(32.dp)
-                        .clickable { mapViewRef?.controller?.zoomIn() }
+                        .clickable {
+                            zoomLevel = (zoomLevel + 0.25f).coerceAtMost(2.8f)
+                        }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(imageVector = Icons.Default.Add, contentDescription = "Acercar", tint = McTextPrimary, modifier = Modifier.size(16.dp))
                     }
                 }
                 Surface(
-                    color = McCardWhite.copy(alpha = 0.94f),
+                    color = McCardWhite.copy(alpha = 0.95f),
                     shape = CircleShape,
                     shadowElevation = 4.dp,
                     modifier = Modifier
                         .size(32.dp)
-                        .clickable { mapViewRef?.controller?.zoomOut() }
+                        .clickable {
+                            zoomLevel = (zoomLevel - 0.25f).coerceAtLeast(1.0f)
+                            if (zoomLevel <= 1.05f) panOffset = Offset.Zero
+                        }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(imageVector = Icons.Default.Remove, contentDescription = "Alejar", tint = McTextPrimary, modifier = Modifier.size(16.dp))
@@ -948,9 +1202,9 @@ fun McColonyMapCard(
                 }
             }
 
-            // Etiqueta inferior central con coordenadas GPS activas en Colombia
+            // Etiqueta inferior central con coordenadas GPS activas en Bogotá
             Surface(
-                color = McCardWhite.copy(alpha = 0.92f),
+                color = McCardWhite.copy(alpha = 0.94f),
                 shape = RoundedCornerShape(999.dp),
                 shadowElevation = 3.dp,
                 modifier = Modifier
@@ -958,13 +1212,13 @@ fun McColonyMapCard(
                     .padding(bottom = 12.dp)
             ) {
                 Text(
-                    text = String.format(Locale.US, "GPS Colombia: %.4f, %.4f", userLat, userLon),
+                    text = String.format(Locale.US, "GPS Bogotá: %.4f, %.4f · Toca para ubicar", userLat, userLon),
                     style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 9.5.sp),
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
 
-            // Botón flotante '+' para reportar gato no censado
+            // Botón flotante '+' para registrar/reportar gato en Bogotá
             Surface(
                 color = McCoral,
                 shape = CircleShape,
@@ -978,7 +1232,7 @@ fun McColonyMapCard(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Default.Add,
-                        contentDescription = "Reportar",
+                        contentDescription = "Registrar gato",
                         tint = McTextPrimary,
                         modifier = Modifier.size(22.dp)
                     )
@@ -986,7 +1240,7 @@ fun McColonyMapCard(
             }
         }
 
-        // Tarjetas interactivas de paradas de la ruta (al tocar una colonia, el mapa de Colombia se mueve a ella)
+        // Tarjetas interactivas de paradas de la ruta en Bogotá (al tocar una colonia, centra en ella y abre su detalle)
         if (routeList.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(
@@ -997,15 +1251,15 @@ fun McColonyMapCard(
                     Surface(
                         color = McCardWhite,
                         shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            if (selectedColony?.id == stop.id) McCoral else Color.Transparent
+                        ),
                         modifier = Modifier
                             .weight(1f)
                             .clickable {
-                                val lat = stop.latitud
-                                val lon = stop.longitud
-                                if (lat != null && lon != null) {
-                                    mapViewRef?.controller?.animateTo(GeoPoint(lat, lon))
-                                    mapViewRef?.controller?.setZoom(15.0)
-                                }
+                                selectedColony = stop
+                                MiauCareRepository.selectedColonyId = stop.id
                                 onColonyPinClick()
                             }
                     ) {

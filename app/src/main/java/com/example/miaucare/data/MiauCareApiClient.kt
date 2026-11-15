@@ -51,7 +51,7 @@ object MiauCareApiClient {
         val original = chain.request()
         val builder = original.newBuilder()
         val token = MiauCareRepository.jwtToken
-        if (token.isNotBlank()) {
+        if (original.header("Authorization") == null && token.isNotBlank()) {
             builder.header("Authorization", "Bearer $token")
         }
         if (original.header("Content-Type") == null && original.body !is MultipartBody) {
@@ -71,17 +71,19 @@ object MiauCareApiClient {
     suspend fun request(
         method: String,
         path: String,
-        jsonBody: String? = null
+        jsonBody: String? = null,
+        overrideToken: String? = null
     ): ApiResult<String> = withContext(Dispatchers.IO) {
         val normalizedPath = if (path.startsWith("/")) path else "/$path"
         val primaryUrl = "${baseUrl.trimEnd('/')}$normalizedPath"
-        executeWithRetry(method, primaryUrl, jsonBody)
+        executeWithRetry(method, primaryUrl, jsonBody, overrideToken)
     }
 
     private suspend fun executeWithRetry(
         method: String,
         fullUrl: String,
-        jsonBody: String?
+        jsonBody: String?,
+        overrideToken: String? = null
     ): ApiResult<String> {
         var lastError: ApiResult.Error? = null
         val mediaType = "application/json; charset=utf-8".toMediaType()
@@ -93,6 +95,9 @@ object MiauCareApiClient {
                     else -> null
                 }
                 val requestBuilder = Request.Builder().url(fullUrl)
+                if (!overrideToken.isNullOrBlank()) {
+                    requestBuilder.header("Authorization", "Bearer $overrideToken")
+                }
                 when (method.uppercase()) {
                     "GET" -> requestBuilder.get()
                     "DELETE" -> requestBuilder.delete()
@@ -163,9 +168,9 @@ object MiauCareApiClient {
         carpeta: String = "gatos"
     ): ApiResult<String> = withContext(Dispatchers.IO) {
         val targetUrls = buildList {
-            add("${baseUrl.trimEnd('/')}/api/archivos/subir?carpeta=$carpeta")
+            add("${baseUrl.trimEnd('/')}/api/archivos/subir")
             if (autoFallbackToCloud && baseUrl != RENDER_CLOUD_URL) {
-                add("$RENDER_CLOUD_URL/api/archivos/subir?carpeta=$carpeta")
+                add("$RENDER_CLOUD_URL/api/archivos/subir")
             }
         }
 

@@ -999,9 +999,12 @@ fun VoluntarioHomeScreen(
         McColonyMapCard(
             onAddClick = onReportUnregisteredCat,
             onColonyPinClick = {
-                val firstCol = MiauCareRepository.routeColonies.firstOrNull()
-                if (firstCol != null) {
-                    MiauCareRepository.showToast("${firstCol.name} · ${firstCol.catsCountText}")
+                val selId = MiauCareRepository.selectedColonyId
+                val pickedCol = MiauCareRepository.routeColonies.firstOrNull { it.id == selId }
+                    ?: MiauCareRepository.colonies.firstOrNull { it.id == selId }
+                    ?: MiauCareRepository.routeColonies.firstOrNull()
+                if (pickedCol != null) {
+                    MiauCareRepository.showToast("${pickedCol.name} (${pickedCol.address}) · ${pickedCol.catsCountText}")
                 }
             },
             onUseGpsClick = {
@@ -1898,7 +1901,8 @@ fun VoluntarioCensusScreen(
 fun CensusGridCatCard(
     cat: CatProfile,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDeleteClick: (() -> Unit)? = null
 ) {
     Surface(
         color = McCardWhite,
@@ -1985,6 +1989,39 @@ fun CensusGridCatCard(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(vertical = 5.dp)
                     )
+                }
+            }
+            if (onDeleteClick != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    color = McCoralSoft,
+                    shape = RoundedCornerShape(999.dp),
+                    border = BorderStroke(1.dp, McCoralBorder),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onDeleteClick() }
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.DeleteOutline,
+                            contentDescription = "Eliminar",
+                            tint = McCoralDark,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Eliminar gato",
+                            style = McLabel11Regular.copy(
+                                color = McCoralDark,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp
+                            )
+                        )
+                    }
                 }
             }
         }
@@ -2248,7 +2285,7 @@ private fun CatStatBox(
 }
 
 // =========================================================================
-// 11. REPORTAR GATO NO CENSADO (`POST /api/archivos/subir?carpeta=gatos` -> `POST /api/avistamientos/no-censado`)
+// 11. REGISTRAR / REPORTAR GATO EN VOLUNTARIO (`POST /api/archivos/subir`, `POST /api/gatos`, `POST /api/avistamientos/no-censado`)
 // =========================================================================
 @Composable
 fun ReportUnregisteredCatScreen(
@@ -2257,19 +2294,32 @@ fun ReportUnregisteredCatScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var apparentState by remember { mutableStateOf("Herido") }
+    var catName by remember { mutableStateOf("") }
+    var catCode by remember { mutableStateOf("MC-BOG-${MiauCareRepository.cats.size + 25}") }
+    var catBreed by remember { mutableStateOf("Mestizo") }
+    var catSex by remember { mutableStateOf("Macho") }
+    var catAge by remember { mutableStateOf("1 año") }
+    var catWeight by remember { mutableStateOf("3.5") }
+    var catSterilized by remember { mutableStateOf(false) }
+    var apparentState by remember { mutableStateOf("Sano") }
     var selectedZoneIndex by remember { mutableIntStateOf(0) }
     var observations by remember { mutableStateOf("") }
     var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var isUploading by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        if (MiauCareRepository.colonies.isEmpty()) {
+            MiauCareRepository.fetchZonasResumen()
+        }
+    }
+
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             selectedImageBytes = MiauCareApiClient.readUriBytes(context, uri)
-            selectedFileName = "gato_rescate_${System.currentTimeMillis()}.jpg"
+            selectedFileName = "gato_bogota_${System.currentTimeMillis()}.jpg"
         }
     }
 
@@ -2289,37 +2339,12 @@ fun ReportUnregisteredCatScreen(
             McBackCircleButton(onClick = onBack)
             Spacer(modifier = Modifier.width(12.dp))
             Column {
-                Text(text = "Reportar gato no censado", style = McTitle18)
-                Text(text = "Evidencia fotográfica y alerta de rescate", style = McLabel11Regular)
+                Text(text = "Registrar gato y reporte", style = McTitle18)
+                Text(text = "Datos del gato, colonia en Bogotá y evidencia fotográfica", style = McLabel11Regular)
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Surface(
-            color = McSoftNeutral,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Info,
-                    contentDescription = null,
-                    tint = McTextPrimary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "Este gato no está en el censo, se subirá su foto a Supabase y se generará un registro no censado.",
-                    style = McLabel12Bold
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Photo Upload Box (opens Gallery picker or quick sample fallback)
         Surface(
@@ -2328,54 +2353,158 @@ fun ReportUnregisteredCatScreen(
             border = BorderStroke(1.dp, McBorder),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(155.dp)
+                .height(140.dp)
                 .clickable { imagePickerLauncher.launch("image/*") }
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier.padding(14.dp)
             ) {
                 Surface(
                     color = if (selectedImageBytes != null) StatusSanoBg else McSoftNeutral,
                     shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(44.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = if (selectedImageBytes != null) Icons.Default.Check else Icons.Outlined.PhotoCamera,
                             contentDescription = null,
                             tint = if (selectedImageBytes != null) StatusSanoText else McTextPrimary,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = selectedFileName ?: "Añadir foto del gato (Galería)",
                     style = McBody14Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Se subirá con POST /api/archivos/subir (carpeta=gatos)",
-                    style = McLabel11Regular
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "O usar foto de muestra del dispositivo",
+                    text = "O tocar aquí para usar foto de muestra",
                     style = McLabel11Regular.copy(color = McCoralDark, fontWeight = FontWeight.Bold),
                     modifier = Modifier.clickable {
                         selectedImageBytes = MiauCareApiClient.drawableToJpegBytes(context, R.drawable.img_cat_samantha)
-                        selectedFileName = "gato_muestra_supabase.jpg"
+                        selectedFileName = "gato_muestra_bogota.jpg"
                     }
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        Text(text = "Ubicación / Colonia", style = McLabel12Bold)
+        // Datos completos del gato
+        Surface(
+            color = McCardWhite,
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(text = "Datos del gato", style = McTitle16)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    McInputField(
+                        label = "Nombre del gato",
+                        value = catName,
+                        onValueChange = { catName = it },
+                        placeholder = "Ej. Michi, Simba...",
+                        modifier = Modifier.weight(1.2f)
+                    )
+                    McInputField(
+                        label = "Código",
+                        value = catCode,
+                        onValueChange = { catCode = it },
+                        placeholder = "MC-BOG-25",
+                        modifier = Modifier.weight(0.8f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    McInputField(
+                        label = "Raza / Pelaje",
+                        value = catBreed,
+                        onValueChange = { catBreed = it },
+                        placeholder = "Mestizo, Calicó...",
+                        modifier = Modifier.weight(1f)
+                    )
+                    McInputField(
+                        label = "Edad aprox.",
+                        value = catAge,
+                        onValueChange = { catAge = it },
+                        placeholder = "Ej. 1 año, 6 meses",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
+                    McInputField(
+                        label = "Peso aprox. (kg)",
+                        value = catWeight,
+                        onValueChange = { catWeight = it },
+                        placeholder = "3.5",
+                        modifier = Modifier.weight(1f)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = "Sexo", style = McLabel12Bold)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Macho", "Hembra").forEach { sx ->
+                                McFilterPill(
+                                    label = sx,
+                                    selected = catSex == sx,
+                                    onClick = { catSex = sx },
+                                    unselectedBg = McSoftNeutral
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(text = "¿Está esterilizado?", style = McLabel12Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(false to "No esterilizado", true to "Esterilizado (CES)").forEach { (valBool, label) ->
+                        McFilterPill(
+                            label = label,
+                            selected = catSterilized == valBool,
+                            onClick = { catSterilized = valBool },
+                            unselectedBg = McSoftNeutral
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(text = "Colonia en Bogotá", style = McLabel12Bold)
         Spacer(modifier = Modifier.height(8.dp))
+        if (zones.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                zones.forEachIndexed { idx, zn ->
+                    McFilterPill(
+                        label = zn.name,
+                        selected = selectedZoneIndex == idx,
+                        onClick = { selectedZoneIndex = idx },
+                        unselectedBg = McCardWhite
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+        }
         Surface(
             color = McCardWhite,
             shape = RoundedCornerShape(16.dp),
@@ -2388,36 +2517,21 @@ fun ReportUnregisteredCatScreen(
                 Icon(
                     imageVector = Icons.Outlined.LocationOn,
                     contentDescription = null,
-                    tint = McTextPrimary,
+                    tint = McCoral,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = currentZone?.let { "${it.name} - ${it.address}" } ?: "Colonia Norte - C. del Olivo",
+                    text = currentZone?.let { "${it.name} · ${it.address}" } ?: "Colonia Norte · Parque El Virrey, Bogotá",
                     style = McBody14Regular.copy(color = McTextPrimary),
                     modifier = Modifier.weight(1f)
                 )
-                Surface(
-                    color = McSoftNeutral,
-                    shape = RoundedCornerShape(999.dp),
-                    modifier = Modifier.clickable {
-                        if (zones.isNotEmpty()) {
-                            selectedZoneIndex = (selectedZoneIndex + 1) % zones.size
-                        }
-                    }
-                ) {
-                    Text(
-                        text = "Cambiar",
-                        style = McLabel11Regular.copy(color = McTextPrimary, fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                    )
-                }
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        Text(text = "Estado aparente", style = McLabel12Bold)
+        Text(text = "Estado aparente de salud", style = McLabel12Bold)
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -2449,10 +2563,10 @@ fun ReportUnregisteredCatScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         McInputField(
-            label = "Observaciones",
+            label = "Observaciones y condiciones especiales",
             value = observations,
             onValueChange = { observations = it },
             placeholder = "Color del pelaje, comportamiento, señas particulares...",
@@ -2460,10 +2574,10 @@ fun ReportUnregisteredCatScreen(
             minLines = 3
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         McCoralButton(
-            text = if (isUploading) "Subiendo foto y enviando..." else "Enviar alerta de rescate",
+            text = if (isUploading) "Guardando gato y reporte..." else "Registrar gato y enviar reporte",
             onClick = {
                 if (!isUploading) {
                     isUploading = true
@@ -2473,8 +2587,15 @@ fun ReportUnregisteredCatScreen(
                         val res = MiauCareRepository.registrarAvistamientoNoCensado(
                             zonaId = currentZone?.numericId,
                             estadoAparenteUi = apparentState,
-                            observaciones = observations,
-                            imageBytes = bytesToUpload
+                            observaciones = observations.ifBlank { "Gato registrado en Bogotá (${apparentState})" },
+                            imageBytes = bytesToUpload,
+                            nombreGato = catName.ifBlank { "Michi Bogotá" },
+                            codigoGato = catCode,
+                            razaGato = catBreed,
+                            sexoGatoUi = catSex,
+                            edadEstimadaGato = catAge,
+                            pesoGatoKg = catWeight.toDoubleOrNull() ?: 3.5,
+                            esterilizadoGato = catSterilized
                         )
                         isUploading = false
                         if (res is ApiResult.Success) {
@@ -2758,21 +2879,30 @@ fun VoluntarioProfileScreen(
     var fullName by remember { mutableStateOf(MiauCareRepository.sessionUserName) }
     var email by remember { mutableStateOf(MiauCareRepository.sessionUserEmail) }
     var phone by remember { mutableStateOf(MiauCareRepository.volunteerPhone) }
+    var disponibilidad by remember { mutableStateOf(MiauCareRepository.volunteerDisponibilidad) }
+    var selectedZoneId by remember { mutableStateOf(MiauCareRepository.volunteerAssignedZoneId) }
 
     val gpsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) {
-        val (lat, lon) = MiauCareApiClient.obtainDeviceCoordinates(context)
-        scope.launch {
-            MiauCareRepository.actualizarUbicacionGpsVoluntario(lat, lon)
+        MiauCareApiClient.requestRealtimeColombiaLocation(context) { lat, lon ->
+            scope.launch {
+                MiauCareRepository.actualizarUbicacionGpsVoluntario(lat, lon)
+                selectedZoneId = MiauCareRepository.volunteerAssignedZoneId
+            }
         }
     }
 
     LaunchedEffect(Unit) {
+        if (MiauCareRepository.colonies.isEmpty()) {
+            MiauCareRepository.fetchZonasResumen()
+        }
         MiauCareRepository.fetchVoluntarioPerfil()
         fullName = MiauCareRepository.sessionUserName
         email = MiauCareRepository.sessionUserEmail
         phone = MiauCareRepository.volunteerPhone
+        disponibilidad = MiauCareRepository.volunteerDisponibilidad
+        selectedZoneId = MiauCareRepository.volunteerAssignedZoneId
     }
 
     Column(
@@ -2921,6 +3051,52 @@ fun VoluntarioProfileScreen(
             onValueChange = { phone = it }
         )
 
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(text = "Disponibilidad de horario", style = McLabel12Bold)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("Mañanas", "Tardes", "Noches", "Fines de semana").forEach { disp ->
+                McFilterPill(
+                    label = disp,
+                    selected = disponibilidad.equals(disp, ignoreCase = true),
+                    onClick = { disponibilidad = disp },
+                    unselectedBg = McCardWhite
+                )
+            }
+        }
+
+        if (MiauCareRepository.colonies.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(text = "Colonia asignada en Bogotá", style = McLabel12Bold)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MiauCareRepository.colonies.forEach { zn ->
+                    McFilterPill(
+                        label = zn.name,
+                        selected = selectedZoneId == zn.numericId,
+                        onClick = {
+                            selectedZoneId = zn.numericId
+                            scope.launch {
+                                MiauCareRepository.asignarZonaManualVoluntario(zn.numericId)
+                            }
+                        },
+                        unselectedBg = McCardWhite
+                    )
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(20.dp))
 
         McCoralButton(
@@ -2928,7 +3104,13 @@ fun VoluntarioProfileScreen(
             darkText = true,
             onClick = {
                 scope.launch {
-                    MiauCareRepository.actualizarPerfilVoluntario(fullName, email, phone)
+                    MiauCareRepository.actualizarPerfilVoluntario(
+                        nombre = fullName,
+                        correo = email,
+                        telefono = phone,
+                        disponibilidad = disponibilidad,
+                        zonaId = selectedZoneId
+                    )
                 }
             }
         )
