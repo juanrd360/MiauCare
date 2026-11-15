@@ -63,9 +63,9 @@ object MiauCareApiClient {
 
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(authInterceptor)
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(65, TimeUnit.SECONDS)
+        .writeTimeout(35, TimeUnit.SECONDS)
         .build()
 
     suspend fun request(
@@ -145,7 +145,7 @@ object MiauCareApiClient {
                     statusCode = 0,
                     message = "Error de conexión con el servidor (${e.localizedMessage ?: "sin red"})."
                 )
-                if (attempt < 2) delay(150L)
+                if (attempt == 1) delay(250L) else break
             } catch (e: Exception) {
                 return ApiResult.Error(
                     statusCode = -1,

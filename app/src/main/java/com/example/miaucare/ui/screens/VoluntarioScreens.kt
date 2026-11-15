@@ -48,6 +48,8 @@ import com.example.miaucare.data.MiauCareRepository
 import com.example.miaucare.data.MiauRole
 import com.example.miaucare.ui.components.*
 import com.example.miaucare.ui.theme.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -59,19 +61,30 @@ fun SplashScreen(
     onFinished: () -> Unit
 ) {
     val context = LocalContext.current
+    var navigated by remember { mutableStateOf(false) }
+    val finishOnce: () -> Unit = {
+        if (!navigated) {
+            navigated = true
+            onFinished()
+        }
+    }
+
     LaunchedEffect(Unit) {
         MiauCareRepository.initSession(context)
-        MiauCareRepository.fetchZonasResumen()
-        MiauCareRepository.fetchCatalogosMaestros()
+        // Precarga y activación del servidor en paralelo para que nunca bloquee el paso a Inicia Sesión
+        CoroutineScope(Dispatchers.Main).launch {
+            runCatching { MiauCareRepository.fetchZonasResumen() }
+            runCatching { MiauCareRepository.fetchCatalogosMaestros() }
+        }
         delay(1200)
-        onFinished()
+        finishOnce()
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(McBackground)
-            .clickable { onFinished() }
+            .clickable { finishOnce() }
     ) {
         McCatImage(
             resId = R.drawable.img_logo_miaucare,
